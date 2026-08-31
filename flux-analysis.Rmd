@@ -1,0 +1,739 @@
+---
+title: "flux-analysis"
+author: "Gavin McNicol"
+date: "2026-09-01"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Purpose: Analysis of James Woodworth Prairie 2022-2023 flux data. Led by Junior Francois with supervision of Gavin McNicol at the University of Illinois Chicago.
+
+# Load libraries
+
+```{r packages}
+library(tidyverse)
+library(lme4)
+library(rpart)
+library(rpart.plot)
+```
+
+# Data
+
+```{r read-data}
+data <- read_csv("data/2022_full_data.csv") %>% 
+  select(-estimate, -eco)
+head(data)
+```
+
+check on groupings
+
+```{r}
+data %>% distinct(ecosystem)
+```
+
+BP = big prairie (open prairie 1; Pr-1)
+SP = small prairie (open prairie 2; Pr-2)
+NW = north wetlands (sloping open prairie; Wt-1)
+SW = south wetlands (wet prairie; Wt-2)
+EW = east woodlands (oak woodlands 1; Wd-1)
+WW = west woodlands (oak woodlands 2; Wd-2)
+
+
+# Wrangling
+
+- Change ecosystems to oak woodland, open prairie, wet prairie
+
+```{r wrangling}
+data <- data %>% 
+  mutate(cover = 
+  case_when(
+    ecosystem %in% c("BP", "SP") ~ "Pr",
+    ecosystem %in% c("EW", "WW") ~ "Wd", 
+    ecosystem %in% c("NW", "SW") ~ "Wt",
+    TRUE ~ NA
+  )) %>% 
+  mutate(site = 
+  case_when(
+    ecosystem == "BP" ~ 1,
+    ecosystem == "SP" ~ 2,
+    ecosystem == "NW" ~ 1,
+    ecosystem == "SW" ~ 2,
+    ecosystem == "EW" ~ 1,
+    ecosystem == "WW" ~ 2,
+    TRUE ~ NA
+  )) %>% 
+  select(gas, date, cover, site, transect, rep, flux, p.value, soil_moisture, soil_temperature)
+```
+
+# Flux QC 
+
+**Logic table:**
+
+Situation,                              CO2,  CH4,  N2O
+CO2 p > 0.05 or CO2 flux > 9*,           NA,   NA,   NA
+"CO2 is good, but CH4/N2O p > 0.05",    keep, 0,    0
+CO2 is good and CH4/N2O p ≤ 0.05,       keep, keep, keep
+
+*Set very high woodland CO2 emissions (> 9) related to ant burrow to `NA`
+
+```{r flux-qc}
+data <- data %>%
+  group_by(date, cover, site, transect, rep) %>%
+  mutate(
+    # Extract the CO2 values for this chamber measurement
+    co2_p     = p.value[gas == "co2"][1],
+    co2_flux  = flux[gas == "co2"][1],
+    
+    # Flag bad analytical process / injection based on CO2
+    bad_injection = (is.na(co2_p) | co2_p > 0.05) | 
+                    (!is.na(co2_flux) & co2_flux > 9)
+  ) %>%
+  mutate(
+    flux = case_when(
+      # Everything from a bad injection becomes NA
+      bad_injection ~ NA_real_,
+      
+      # CO2 that passed the checks keeps its value
+      gas == "co2" ~ flux,
+      
+      # CH4 / N2O with non-significant slope → 0 (only if injection was good)
+      gas %in% c("ch4", "n2o") & p.value > 0.05 ~ 0,
+      
+      # Otherwise keep the calculated flux
+      TRUE ~ flux
+    )
+  ) %>%
+  select(-co2_p, -co2_flux, -bad_injection) %>%
+  ungroup()
+```
+
+# Add coords to create final tidy output dataset
+
+```{r}
+coords <- read_csv("2022-site-coords.csv")
+data %>%
+  mutate(site = as.character(site)) %>% 
+  unite(site, cover, site, sep = "-") %>% 
+  left_join(coords) %>% 
+  write_csv("2022-nachusa-fluxes.csv")
+```
+
+```{r detection-limit}
+# ============================================================
+# Lowest Detectable Flux for CH4 and N2O
+# ============================================================
+
+# ---- Instrument precision ----
+ch4_std_ppm    <- 10.1      # ppm
+n2o_std_ppm    <- 1.0       # ppm
+rel_precision  <- 0.02      # 2%
+
+ch4_precision_ppm <- ch4_std_ppm * rel_precision   # 0.303 ppm
+n2o_precision_ppm <- n2o_std_ppm * rel_precision   # 0.030 ppm
+
+# ---- Chamber parameters ----
+area_m2   <- 0.05          # m²
+height_m  <- 0.12          # m
+time_min  <- 30            # minutes
+time_s    <- time_min * 60
+
+# ---- Ideal gas conversion (ppm → nmol m⁻³) ----
+# At 1 atm and 25 °C:
+# 1 ppm = 40.87 µmol m⁻³ = 40870 nmol m⁻³
+R <- 0.082057              # L atm mol⁻¹ K⁻¹
+T <- 298.15                # K
+P <- 1                     # atm
+
+moles_per_m3     <- (P / (R * T)) * 1000          # mol m⁻³
+ppm_to_nmol_m3   <- moles_per_m3 * 1000           # nmol m⁻³ per ppm
+# ≈ 40870
+
+# ---- Minimum detectable flux ----
+# F (nmol m⁻² s⁻¹) = (ΔC_nmol_m3 / Δt_s) * height_m
+
+ch4_min_flux <- (ch4_precision_ppm * ppm_to_nmol_m3 / time_s) * height_m
+n2o_min_flux <- (n2o_precision_ppm * ppm_to_nmol_m3 / time_s) * height_m
+
+# ---- Results ----
+cat("=== Lowest Detectable Flux ===\n")
+cat(sprintf("CH4 precision          : %.3f ppm\n", ch4_precision_ppm))
+cat(sprintf("CH4 lowest detectable flux : %.3f nmol m⁻² s⁻¹\n\n", ch4_min_flux))
+
+cat(sprintf("N2O precision          : %.3f ppm\n", n2o_precision_ppm))
+cat(sprintf("N2O lowest detectable flux : %.3f nmol m⁻² s⁻¹\n", n2o_min_flux))
+
+cat("\nAssumptions used:\n")
+cat(sprintf("  Chamber area     = %.3f m²\n", area_m2))
+cat(sprintf("  Chamber height   = %.2f m\n", height_m))
+cat(sprintf("  Deployment time  = %.0f min\n", time_min))
+cat("  Temperature/pressure ≈ 25 °C, 1 atm\n")
+```
+
+# Data Summary
+
+# Overall stats
+
+```{r num-obs}
+data %>% 
+  filter(!is.na(flux)) %>% 
+  count(gas)
+```
+
+
+```{r flux-dist, fig.width=8, fig.height=3}
+data %>% 
+  mutate(gas = fct_relevel(gas, "co2", "ch4", "n2o")) %>% 
+  ggplot(aes(flux)) +
+  geom_density(alpha = 0.6) +
+  facet_wrap(~gas, 
+             scales = "free",
+             labeller = as_labeller(c(
+    co2 = "CO[2]",
+    ch4 = "CH[4]",
+    n2o = "N[2]*O"
+  ), label_parsed)) +
+  theme_classic() +
+  labs(x = expression(atop("GHG Flux", "("*mu*"mol CO"[2]*" m"^{-2}*" s"^{-1}*"), (nmol CH"[4]*" | N"[2]*"O m"^{-2}*" s"^{-1}*")")),
+       y = "Density") +
+  scale_fill_viridis_d() %>% 
+  theme(
+    strip.background = element_blank(),
+    strip.text = element_text(
+    size = 12,
+    face = "bold"
+  ))
+ggsave("paper-figures/figS1.png", height = 3, width = 8)
+```
+
+CO2 unimodal with long right tail
+CH4 bimodal with long left tail and many zeros
+N2O unimodal normal around zero
+
+```{r overall-stats}
+data %>% 
+  group_by(gas) %>% 
+    summarize(min = min(flux, na.rm = T),
+              q25 = quantile(flux, 0.25, na.rm = T),
+              median = median(flux, na.rm = T),
+              q75 = quantile(flux, 0.75, na.rm = T),
+              max = max(flux, na.rm = T))
+```
+
+# By-cover stats
+
+```{r num-obs}
+data %>% 
+  filter(gas %in% c("co2", "n2o"),
+         !is.na(flux)) %>% 
+  group_by(gas, cover) %>% 
+  count(gas)
+```
+
+```{r num-obs}
+data %>% 
+  filter(gas %in% c("ch4"),
+         !is.na(flux)) %>% 
+  group_by(gas, cover, site) %>% 
+  count(gas)
+```
+
+## Q1b. What is the center and spread of each flux, for each cover type, over the growing season?
+- data were not normally distributed, except for N2O
+- therefore, report min, q25, median, q75, max 
+- mean and standard deviation for N2O
+- by-site for CH4, aggregated for CO2 and N2O 
+
+```{r flux-dist, fig.width=8, fig.height=3}
+data %>% 
+  mutate(gas = fct_relevel(gas, "co2", "ch4", "n2o")) %>% 
+  ggplot(aes(flux, fill = cover)) +
+  geom_density(alpha = 0.6) +
+  facet_wrap(~gas, 
+             scales = "free",
+             labeller = as_labeller(c(
+    co2 = "CO[2]",
+    ch4 = "CH[4]",
+    n2o = "N[2]*O"
+  ), label_parsed)) +
+  theme_classic() +
+  labs(x = expression(atop("GHG Flux", "("*mu*"mol CO"[2]*" m"^{-2}*" s"^{-1}*"), (nmol CH"[4]*" | N"[2]*"O m"^{-2}*" s"^{-1}*")")),
+       y = "Density",
+       fill = "Cover") +
+  scale_fill_viridis_d(option = "magma") +
+  theme(
+    strip.background = element_blank(),
+    strip.text = element_text(),
+    size = 12,
+    face = "bold"
+  )
+ggsave("paper-figures/fig2.png", height = 3, width = 8)
+```
+
+CO2 fluxes for woodlands are unimodal and peak at 2-3 (smallest source)
+  (note, identified and removed outlier co2 flux in woodlands > 9)
+CO2 flues for wetlands and prairie are bimodal with peaks at 1.5 and 4 (larger sources)
+
+CH4 fluxes for woodlands are bimodal with peaks at -1.5 and 0 (largest sink)
+CH4 fluxes for wetlands are bimodal with peaks at 1 and 0 (medium sink)
+CH4 fluxes for prairie are bimodal with peaks at 0.6 and 9 (weakest sink)
+
+N2O fluxes for all cover types are unimodal around zero, with slightly positive skew, esp for prairie
+
+```{r}
+data %>% 
+  filter(gas %in% c("co2", "n2o")) %>% 
+  group_by(gas, cover) %>% 
+    summarize(min = min(flux, na.rm = T),
+              q25 = quantile(flux, 0.25, na.rm = T),
+              median = median(flux, na.rm = T),
+              q75 = quantile(flux, 0.75, na.rm = T),
+              max = max(flux, na.rm = T))
+```
+
+```{r}
+data %>% 
+  filter(gas %in% c("ch4")) %>% 
+  group_by(gas, cover, site) %>% 
+    summarize(min = min(flux, na.rm = T),
+              q25 = quantile(flux, 0.25, na.rm = T),
+              median = median(flux, na.rm = T),
+              q75 = quantile(flux, 0.75, na.rm = T),
+              max = max(flux, na.rm = T))
+```
+
+
+# Site effects
+
+Q: is there a significant site effect within cover types?
+
+```{r}
+data %>% 
+  filter(gas == "co2") %>% 
+  lm(flux ~ cover+factor(site), data = .) %>% 
+  summary()
+```
+
+```{r}
+data %>% 
+  filter(gas == "ch4") %>% 
+  lm(flux ~ cover+factor(site), data = .) %>% 
+  summary()
+```
+```{r}
+data %>% 
+  filter(gas == "n2o") %>% 
+  lm(flux ~ cover+factor(site), data = .) %>% 
+  summary()
+```
+
+# Q2 - Spatiotemporal models with moisture and tempertaure
+
+```{r temp-moisture-pattern}
+data %>% 
+  filter(!is.na(date)) %>% 
+  select(date, cover, soil_moisture, soil_temperature) %>% 
+  pivot_longer(3:4, names_to = "soil_var") %>% 
+  mutate(soil_var = fct_relevel(soil_var, "soil_temperature", "soil_moisture")) %>% 
+  ggplot(aes(x = factor(date), y = value, color = cover)) +
+  geom_boxplot() +
+  facet_wrap(~soil_var, 
+             scales = "free",
+             labeller = as_labeller(c(
+    soil_moisture = "Soil Moisture",
+    soil_temperature = "Soil Temperature"
+  ))) +
+  theme_classic() +
+  labs(y = expression(atop("Temp. ("*degree*"C)", "Moisture (%)")),
+       x = "Sampling Date (monthly)",
+       color = "Cover") +
+  scale_fill_viridis_d() %>% 
+  theme(
+    strip.background = element_blank(),
+    strip.text = element_text(
+    size = 12,
+    face = "bold"
+  ))
+ggsave("paper-figures/fig2.png", height = 3, width = 8)
+```
+# Soil temp and moisture summary table (Table S2)
+
+
+```{r}
+data %>%  
+  filter(!is.na(date)) %>% 
+  select(date, cover, soil_moisture, soil_temperature) %>% 
+  group_by(date) %>% 
+  summarize(mean_soil_t = mean(soil_temperature, na.rm = T),
+            sd_soil_t = sd(soil_temperature, na.rm = T),
+            mean_soil_moist = mean(soil_moisture, na.rm = T),
+            sd_soil_moist = sd(soil_moisture, na.rm = T)) 
+```
+
+
+```{r}
+data %>%  
+  filter(!is.na(date)) %>% 
+  select(date, cover, soil_moisture, soil_temperature) %>% 
+  group_by(date, cover) %>% 
+  summarize(mean_soil_t = mean(soil_temperature, na.rm = T),
+            sd_soil_t = sd(soil_temperature, na.rm = T),
+            mean_soil_moist = mean(soil_moisture, na.rm = T),
+            sd_soil_moist = sd(soil_moisture, na.rm = T)) 
+  
+```
+
+## Temperate ranges within 10-25 C
+
+```{r}
+data %>% 
+  count(gas == "co2" & soil_temperature < 10 | soil_temperature > 25) 
+55/593*100
+```
+
+## Temperature ranges for woodlands
+
+```{r}
+data %>% 
+    filter(gas == "co2" & soil_temperature > 25 & cover == "Wd") %>% 
+  summarize(count = n(),
+            mean_soil_t = mean(soil_temperature),
+            mean_soil_m = mean(soil_moisture))
+```
+
+## Highest temp-moisture combination in wet prairie
+
+```{r}
+data %>% 
+  filter(gas == "co2" & date == "2022-08-18") %>% 
+  group_by(cover) %>% 
+  summarize(soil_t = max(soil_temperature, na.rm = T),
+            soil_m = max(soil_moisture, na.rm = T))
+``` 
+
+
+```{r fig.height = 4.5, fig.width = 11}
+data %>% 
+  mutate(gas = fct_relevel(gas, "co2", "ch4", "n2o")) %>% 
+  ggplot(aes(x = soil_temperature, y = flux, shape = cover, color = soil_moisture)) +
+  geom_point(alpha = 0.6, size = 3) +
+  facet_wrap(~gas, 
+             scales = "free",
+             labeller = as_labeller(c(
+    co2 = "CO[2]",
+    ch4 = "CH[4]",
+    n2o = "N[2]*O"
+  ), label_parsed)) +
+  theme_classic() +
+  labs(y = expression(atop("GHG Flux", "("*mu*"mol CO"[2]*" m"^{-2}*" s"^{-1}*"), (nmol CH"[4]*" / N"[2]*"O m"^{-2}*" s"^{-1}*")")),
+       x = expression("Soil Temp. (C)"),
+       fill = "Cover") +
+  scale_fill_viridis_c() %>% 
+  theme(
+    strip.background = element_blank(),
+    strip.text = element_text(
+    size = 12,
+    face = "bold"
+  ))
+ggsave("paper-figures/figS2.png", height = 3, width = 8)
+```
+
+# Use 3D plot -- only for exploration
+
+```{r 3d-plot}
+# library(dplyr)
+# library(forcats)
+# library(plotly)
+# data_3d <- data %>% 
+#   mutate(gas = fct_relevel(gas, "co2", "ch4", "n2o"))
+# 
+# plot_ly(
+#   data = data_3d %>% filter(gas == "co2" & cover == "Wd"),
+#   x = ~soil_temperature,
+#   y = ~soil_moisture,
+#   z = ~flux,
+#   color = ~factor(date),
+#   symbol = ~factor(date),
+#   type = "scatter3d",
+#   mode = "markers",
+#   marker = list(size = 7, opacity = 0.7)
+# ) %>%
+#   layout(
+#     scene = list(
+#       xaxis = list(title = "Soil temperature (°C)"),
+#       yaxis = list(title = "Soil moisture"),
+#       zaxis = list(title = "GHG flux")
+#     )
+#   )
+```
+
+```{r co2-decision-tree}
+d <- data %>%
+  filter(gas == "co2") %>%
+  mutate(
+    cover = factor(cover),
+    site = factor(site)
+  ) %>%
+  select(flux, soil_temperature, soil_moisture, cover) %>%
+  na.omit()
+tree_mod <- rpart(
+  flux ~ soil_temperature + soil_moisture + cover,
+  data = d,
+  method = "anova",
+  control = rpart.control(
+    cp = 0.01,
+    minsplit = 10,
+    minbucket = 5
+  )
+)
+
+# summary(tree_mod)
+```
+
+```{r co2-tree-eval}
+# get best error
+best_cp <- tree_mod$cptable[
+  which.min(tree_mod$cptable[, "xerror"]),
+  "CP"
+]
+
+best_cp
+
+# prune tree
+tree_pruned <- prune(tree_mod, cp = best_cp)
+
+rpart.plot(tree_pruned)
+
+printcp(tree_pruned)
+
+# Training R²
+pred <- predict(tree_pruned)
+R2_train <- cor(d$flux, pred)^2
+
+# Cross-validated R²
+R2_cv <- 1 - min(tree_pruned$cptable[, "xerror"])
+
+R2_train; R2_cv
+
+tree_pruned$variable.importance/244.0486
+```
+
+nsplits = 6
+CO2 CV R2 = 1-0.28630 = 0.71
+Rel. Err. = 0.18
+
+```{r ch4-decision-tree}
+d <- data %>%
+  filter(gas == "ch4") %>%
+  mutate(
+    cover = factor(cover),
+    site = factor(site)
+  ) %>%
+  select(flux, soil_temperature, soil_moisture, cover) %>%
+  na.omit()
+tree_mod <- rpart(
+  flux ~ soil_temperature + soil_moisture + cover,
+  data = d,
+  method = "anova",
+  control = rpart.control(
+    cp = 0.01,
+    minsplit = 10,
+    minbucket = 5
+  )
+)
+
+# summary(tree_mod)
+```
+
+## CO2 Tree Q10
+
+```{r}
+df <- tibble(
+  grouping = c("10-15", "15-20","15-20", "20-25", "20-25"),
+  co2_flux = c(1.1, 1.8, 2.5, 2.8, 4.1),
+  data_percent = c(0.3, 0.23, 0.16, 0.08, 0.22)
+) %>% 
+  group_by(grouping) %>% 
+  # rowwise() %>% 
+  mutate(group_percent = sum(data_percent),
+         group_wt = data_percent/group_percent,
+         group_wt_co2 = group_wt*co2_flux)  %>% 
+  summarize(group_wt_co2 = sum(group_wt_co2))
+
+# Add midpoints
+df <- df %>%
+  mutate(
+    T_mid = case_when(
+      grouping == "10-15" ~ 12.5,
+      grouping == "15-20" ~ 17.5,
+      grouping == "20-25" ~ 22.5
+    )
+  )
+
+# 1. Interval-specific Q10
+Q10_lower <- (df$group_wt_co2[2] / df$group_wt_co2[1]) ^ 2
+Q10_upper <- (df$group_wt_co2[3] / df$group_wt_co2[2]) ^ 2
+
+# 2. Overall Q10 (or regression)
+Q10_overall <- df$group_wt_co2[3] / df$group_wt_co2[1]
+
+fit <- lm(log(group_wt_co2) ~ T_mid, data = df)
+Q10_fit <- exp(10 * coef(fit)["T_mid"])
+
+# Results
+tibble(
+  interval = c("10-15 → 15-20", "15-20 → 20-25", "Overall / fitted (12.5–22.5 °C)"),
+  Q10 = round(c(Q10_lower, Q10_upper, Q10_overall), 2)
+)
+```
+
+
+```{r ch4-eval-tree}
+# get best error
+best_cp <- tree_mod$cptable[
+  which.min(tree_mod$cptable[, "xerror"]),
+  "CP"
+]
+
+best_cp
+
+# prune tree
+tree_pruned <- prune(tree_mod, cp = best_cp)
+
+rpart.plot(tree_pruned)
+printcp(tree_pruned)
+
+# Training R²
+pred <- predict(tree_pruned)
+R2_train <- cor(d$flux, pred)^2
+
+# Cross-validated R²
+R2_cv <- 1 - min(tree_pruned$cptable[, "xerror"])
+
+R2_train; R2_cv
+
+tree_pruned$variable.importance/49.034475
+```
+# more within node stats (change tree by creating/re-creating `tree_pruned`)
+
+```{r}
+node_stats <- tree_pruned$frame %>%
+  tibble::rownames_to_column("node") %>%
+  filter(var == "<leaf>") %>%          # keep only terminal nodes
+  mutate(
+    n          = n,
+    mean       = yval,                 # predicted value (node mean)
+    sse        = dev,                  # sum of squared errors
+    variance   = dev / n,              # population variance
+    sd         = sqrt(dev / n),        # within-node standard deviation
+    se         = sd / sqrt(n)          # standard error of the mean
+  ) %>%
+  select(node, n, mean, sd, se)
+
+print(node_stats)
+```
+
+```{r n2o-decision-tree}
+d <- data %>%
+  filter(gas == "n2o") %>%
+  mutate(
+    cover = factor(cover),
+    site = factor(site)
+  ) %>%
+  select(flux, soil_temperature, soil_moisture, cover) %>%
+  na.omit()
+tree_mod <- rpart(
+  flux ~ soil_temperature + soil_moisture + cover,
+  data = d,
+  method = "anova",
+  control = rpart.control(
+    cp = 0.01,
+    minsplit = 10,
+    minbucket = 5
+  )
+)
+
+summary(tree_mod)
+
+# get best error
+best_cp <- tree_mod$cptable[
+  which.min(tree_mod$cptable[, "xerror"]),
+  "CP"
+]
+
+best_cp
+
+# prune tree
+tree_pruned <- prune(tree_mod, cp = best_cp)
+
+rpart.plot(tree_pruned)
+printcp(tree_pruned)
+
+# Training R²
+pred <- predict(tree_pruned)
+R2_train <- cor(d$flux, pred)^2
+
+# Cross-validated R²
+R2_cv <- 1 - min(tree_pruned$cptable[, "xerror"])
+
+R2_train; R2_cv
+
+tree_pruned$variable.importance
+```
+
+## Comparison to Koyama data
+
+```{r}
+koyama <- read_csv("/Users/gawainmacneacail/Documents/Research/Work/Data Analysis/nachusa-2022-ghg/data/koyama/Koyama_et_al_GPM_Dryad_230720.csv") %>% 
+  janitor::clean_names() %>% 
+  mutate(ch4_mg_ch4_c_m_2_day = as.numeric(ch4_mg_ch4_c_m_2_day))
+
+koyama %>% 
+  ggplot(aes(x = ch4_mg_ch4_c_m_2_day)) +
+  geom_density(fill = "red") +
+  theme_bw()
+
+  
+koyama %>% 
+  group_by(plot_id) %>% 
+  summarize(median_ch4_mg_ch4_c_m_2_day = median(ch4_mg_ch4_c_m_2_day, na.rm=T)) %>% 
+  arrange(median_ch4_mg_ch4_c_m_2_day) %>% 
+  mutate(median_ch4_g_ch4_c_m_2_yr = median_ch4_mg_ch4_c_m_2_day*365.25/1000,
+         median_ch4_kg_ch4_c_m_2_yr = median_ch4_g_ch4_c_m_2_yr*10)
+
+koyama %>% 
+  group_by(plot_id) %>% 
+  summarize(q25_ch4_mg_ch4_c_m_2_day = quantile(ch4_mg_ch4_c_m_2_day, 0.25, na.rm=T)) %>% 
+  arrange(q25_ch4_mg_ch4_c_m_2_day) %>% 
+  mutate(q25_ch4_g_ch4_c_m_2_yr = q25_ch4_mg_ch4_c_m_2_day*365.25/1000,
+        q25_ch4_kg_ch4_c_m_2_yr = q25_ch4_g_ch4_c_m_2_yr*10)
+
+koyama %>% 
+  group_by(plot_id) %>% 
+  summarize(q75_ch4_mg_ch4_c_m_2_day = quantile(ch4_mg_ch4_c_m_2_day, 0.75, na.rm=T)) %>% 
+  arrange(q75_ch4_mg_ch4_c_m_2_day) %>% 
+  mutate(q75_ch4_g_ch4_c_m_2_yr = q75_ch4_mg_ch4_c_m_2_day*365.25/1000,
+        q75_ch4_kg_ch4_c_m_2_yr = q75_ch4_g_ch4_c_m_2_yr*10)
+```
+
+# Local met data
+```{r}
+read_csv("data/nach_temp_precip.csv") %>% 
+  mutate(year = year(day),
+         month = month(day)) %>% 
+  filter(year == 2024) %>% 
+  group_by(month) %>% 
+  summarize(mean_temp = mean((daily_mean_temp-32) * 5/9),
+            total_precip = sum(daily_total_precip*25.4, na.rm = T))
+```
+
+```{r}
+read_csv("data/nach_temp_precip.csv") %>% 
+  mutate(month = month(day)) %>% 
+  # group_by(month) %>% 
+  summarize(mean_temp = mean((daily_mean_temp-32) * 5/9),
+            total_precip = sum(daily_total_precip*25.4, na.rm = T))
+```
+

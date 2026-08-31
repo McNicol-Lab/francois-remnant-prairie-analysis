@@ -1,0 +1,49 @@
+﻿date_collected,site,ecosystem,chamber_no,gas,slope_ppm_min,r2,y_intercept,flag,Comment
+23/07/06,JWP,SW-1,1,co2,40.876,0.9963,522.8,okay,
+23/07/06,JWP,SW-1,1,ch4,-0.0511,0.9284,2.8912,bad,2 time points removed
+23/07/06,JWP,SW-1,1,n2o,-0.0035,0.9763,0.6336,okay,2 time points removed
+23/07/06,JWP,SW-1,2,co2,33.013,0.9817,639.13,okay,
+23/07/06,JWP,SW-1,2,ch4,0.0036,0.9921,2.2924,okay,2 time points removed
+23/07/06,JWP,SW-1,2,n2o,0.0514,0.896,0,bad,"2 time points removed, y-int = 0"
+23/07/06,JWP,SW-1,3,co2,30.096,0.9588,563.4,okay,
+23/07/06,JWP,SW-1,3,ch4,-0.0217,0.9945,3.7233,okay,2 time points removed
+23/07/06,JWP,SW-1,3,n2o,0.0009,0.9382,0.0862,bad,2 time points removed
+23/07/06,JWP,SW-1,4,co2,23.252,0.994,492.29,okay,
+23/07/06,JWP,SW-1,4,ch4,0.1026,0.8717,0,bad,"2 time points removed, y-int = 0"
+23/07/06,JWP,SW-1,4,n2o,0.0004,0.9691,0.0933,okay,2 time points removed
+23/07/06,JWP,SW-2,1,co2,64.549,0.9964,520.07,okay,
+23/07/06,JWP,SW-2,1,ch4,0.0148,0.7014,2.081,bad,2 time points removed
+23/07/06,JWP,SW-2,1,n2o,-0.0136,0.8174,0.8184,bad,2 time points removed
+23/07/06,JWP,SW-2,2,co2,39.104,0.994,519.77,okay,
+23/07/06,JWP,SW-2,2,ch4,-0.0301,0.9803,2.8288,okay,2 time points removed
+23/07/06,JWP,SW-2,2,n2o,-0.0273,0.9343,0.8143,okay,
+23/07/06,JWP,SW-2,3,co2,26.166,0.9351,611.43,okay,
+23/07/06,JWP,SW-2,3,ch4,-0.0483,0.9339,2.6725,bad,2 time points removed
+23/07/06,JWP,SW-2,3,n2o,-0.0295,0.7122,1.0052,bad,2 time points removed
+23/07/06,JWP,SW-2,4,co2,57.529,0.9933,586.81,okay,
+23/07/06,JWP,SW-2,4,ch4,0.0116,0.9959,2.2455,okay,2 time points removed
+23/07/06,JWP,SW-2,4,n2o,-0.003,0.9921,0.1704,okay,2 time points removed
+23/07/06,JWP,UP-1,1,co2,58.82,0.9997,567.77,okay,
+23/07/06,JWP,UP-1,1,ch4,-0.0578,0.9218,2.873,bad,2 time points removed
+23/07/06,JWP,UP-1,1,n2o,0.0017,0.9153,0.0767,bad,2 time points removed
+23/07/06,JWP,UP-1,2,co2,50.325,0.9965,546.04,okay,
+23/07/06,JWP,UP-1,2,ch4,-0.0103,0.972,2.7238,okay,2 time points removed
+23/07/06,JWP,UP-1,2,n2o,-0.0228,0.9966,0.8176,okay,2 time points removed
+23/07/06,JWP,UP-1,3,co2,71.364,0.9977,511.96,okay,
+23/07/06,JWP,UP-1,3,ch4,-0.0035,0.7862,2.7437,bad,2 time points removed
+23/07/06,JWP,UP-1,3,n2o,-0.0272,0.756,1.0244,bad,2 time points removed
+23/07/06,JWP,UP-1,4,co2,49.997,0.9718,834.36,okay,
+23/07/06,JWP,UP-1,4,ch4,-0.0297,0.9327,2.7324,bad,2 time points removed
+23/07/06,JWP,UP-1,4,n2o,0.0017,0.9863,0.0986,okay ,2 time points removed
+23/07/06,JWP,UP-2,1,co2,43.165,0.9941,543.57,okay,
+23/07/06,JWP,UP-2,1,ch4,-0.0182,0.8877,2.5358,bad ,2 time points removed
+23/07/06,JWP,UP-2,1,n2o,-0.0089,0.8805,0.6791,bad,2 time points removed
+23/07/06,JWP,UP-2,2,co2,53.221,0.9997,468.17,okay,1 time point removed including T4
+23/07/06,JWP,UP-2,2,ch4,0.0012,0.9124,2.2513,bad,2 time points removed including T4
+23/07/06,JWP,UP-2,2,n2o,0.0296,0.717,0,bad,2 time points removed including T4
+23/07/06,JWP,UP-2,3,co2,35.451,0.9947,536.62,okay,1 time point removed including T4
+23/07/06,JWP,UP-2,3,ch4,-0.0039,0.9586,2.3414,okay,1 time point removed including T4
+23/07/06,JWP,UP-2,3,n2o,0.0258,0.8867,0,bad ,"2 time points removed including T4, y-int = 0"
+23/07/06,JWP,UP-2,4,co2,50.194,0.9987,483.44,okay,1 time point removed including T4
+23/07/06,JWP,UP-2,4,ch4,-0.0097,0.8428,2.6146,bad,2 time points removed including T4
+23/07/06,JWP,UP-2,4,n2o,0.0688,0.8917,0,bad,"2 time points removed including T4, y-int = 0"

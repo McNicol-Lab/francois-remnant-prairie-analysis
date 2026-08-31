@@ -1,0 +1,49 @@
+﻿date_collected,site,ecosystem,chamber_no,gas,slope_ppm_min,r2,y_intercept,flag,Comment
+23/08/18,JWP,SW-1,1,co2,9.5512,0.9864,410.92,okay,
+23/08/18,JWP,SW-1,1,ch4,0.0055,0.9183,2.2422,okay,
+23/08/18,JWP,SW-1,1,n2o,0.0004,1,0.3109,okay,2 time points removed
+23/08/18,JWP,SW-1,2,co2,-0.309,0.8018,414.69,okay,
+23/08/18,JWP,SW-1,2,ch4,0.0016,0.9054,2.4127,bad,2 time points removed
+23/08/18,JWP,SW-1,2,n2o,0.0127,0.768,0,bad,"2 time points removed, y-int = 0"
+23/08/18,JWP,SW-1,3,co2,N/A,N/A,N/A,N/A,
+23/08/18,JWP,SW-1,3,ch4,N/A,N/A,N/A,N/A,
+23/08/18,JWP,SW-1,3,n2o,N/A,N/A,N/A,N/A,
+23/08/18,JWP,SW-1,4,co2,N/A,N/A,N/A,N/A,
+23/08/18,JWP,SW-1,4,ch4,N/A,N/A,N/A,N/A,
+23/08/18,JWP,SW-1,4,n2o,N/A,N/A,N/A,N/A,
+23/08/18,JWP,SW-2,1,co2,N/A,N/A,N/A,N/A,
+23/08/18,JWP,SW-2,1,ch4,N/A,N/A,N/A,N/A,
+23/08/18,JWP,SW-2,1,n2o,N/A,N/A,N/A,N/A,
+23/08/18,JWP,SW-2,2,co2,N/A,N/A,N/A,N/A,
+23/08/18,JWP,SW-2,2,ch4,N/A,N/A,N/A,N/A,
+23/08/18,JWP,SW-2,2,n2o,N/A,N/A,N/A,N/A,
+23/08/18,JWP,SW-2,3,co2,N/A,N/A,N/A,N/A,
+23/08/18,JWP,SW-2,3,ch4,N/A,N/A,N/A,N/A,
+23/08/18,JWP,SW-2,3,n2o,N/A,N/A,N/A,N/A,
+23/08/18,JWP,SW-2,4,co2,N/A,N/A,N/A,N/A,
+23/08/18,JWP,SW-2,4,ch4,N/A,N/A,N/A,N/A,
+23/08/18,JWP,SW-2,4,n2o,N/A,N/A,N/A,N/A,
+23/08/18,JWP,UP-1,1,co2,40.247,0.988,456.82,okay,
+23/08/18,JWP,UP-1,1,ch4,-0.0061,0.9766,2.2235,okay,1 time point removed
+23/08/18,JWP,UP-1,1,n2o,0.0002,0.9714,0.3107,okay,1 time point removed
+23/08/18,JWP,UP-1,2,co2,15.896,0.9823,465.95,okay,
+23/08/18,JWP,UP-1,2,ch4,-0.008,0.9878,2.2822,okay,2 time points removed
+23/08/18,JWP,UP-1,2,n2o,0.0003,1,0.3071,okay,2 time points removed
+23/08/18,JWP,UP-1,3,co2,37.236,0.9726,436.15,okay,
+23/08/18,JWP,UP-1,3,ch4,-0.0024,0.8044,2.2192,okay,
+23/08/18,JWP,UP-1,3,n2o,0.0002,0.9554,0.3131,okay,
+23/08/18,JWP,UP-1,4,co2,33.707,0.9982,545.05,okay,
+23/08/18,JWP,UP-1,4,ch4,-0.0077,0.9512,2.3083,okay,
+23/08/18,JWP,UP-1,4,n2o,-0.0003,0.9976,0.3127,okay,2 time points removed
+23/08/18,JWP,UP-2,1,co2,28.402,0.999,467.81,okay,
+23/08/18,JWP,UP-2,1,ch4,-0.003,0.7701,2.298,bad,2 time points removed
+23/08/18,JWP,UP-2,1,n2o,0.0005,0.9389,0.3113,okay,
+23/08/18,JWP,UP-2,2,co2,27.398,0.9949,451.4,okay,
+23/08/18,JWP,UP-2,2,ch4,-0.0019,0.9938,2.2968,okay,2 time points removed
+23/08/18,JWP,UP-2,2,n2o,0.0005,0.9741,0.311,okay,
+23/08/18,JWP,UP-2,3,co2,26.586,0.9991,418.01,okay,
+23/08/18,JWP,UP-2,3,ch4,0.0017,0.9036,2.2196,bad,2 time points removed
+23/08/18,JWP,UP-2,3,n2o,0.0003,0.9062,0.313,okay,
+23/08/18,JWP,UP-2,4,co2,32.215,0.9986,431.04,okay,
+23/08/18,JWP,UP-2,4,ch4,-0.0006,0.9957,2.2412,okay,2 time points removed
+23/08/18,JWP,UP-2,4,n2o,0.0004,0.8877,0.3139,okay,
