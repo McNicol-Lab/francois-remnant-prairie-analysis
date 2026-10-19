@@ -9,7 +9,7 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-Purpose: Analysis of James Woodworth Prairie 2022-2023 flux data. Led by Junior Francois with supervision of Gavin McNicol at the University of Illinois Chicago.
+Purpose: Analysis of James Woodworth Prairie 2022-2023 flux data. Led by Junior Francois with supervision of Gavin McNicol at the University of Illinois Chicago. Below, N2O fluxes are removed from the analysis due to unusually poor precision on the McNicol Lab gas chromatograph. CO2 and CH4 fluxes are retained after QAQC screening.
 
 # Load libraries
 
@@ -18,108 +18,179 @@ library(tidyverse)
 library(lme4)
 library(rpart)
 library(rpart.plot)
+library(emmeans)
 ```
 
 # Data
 
 ```{r read-data}
-data <- read_csv("data/2022_full_data.csv") %>% 
-  select(-estimate, -eco)
+files <- paste0("data/", list.files("data/", pattern = "fluxes.csv"))
+data <- map(files, read_csv)
 head(data)
+```
+
+# clean up data
+
+dates cols in MMDDYY for data[[3]] to data[[6]], 
+  data[[1-2]] in DDMMYY
+  data[[7-16]] in YYMMDD
+
+```{r}
+d1 <- bind_rows(
+  data[[1]],
+  data[[2]]) %>% 
+  mutate(date = dmy(date_collected)) %>% relocate(date) %>% select(-date_collected)
+```
+
+
+```{r}
+d2 <- bind_rows(
+  data[[3]],
+  data[[4]],
+  data[[5]],
+  data[[6]]) %>% 
+  mutate(date = mdy(date_collected)) %>% relocate(date) %>% select(-date_collected)
+```
+
+
+```{r}
+d3 <- bind_rows(
+  data[[7]],
+  data[[8]],
+  data[[9]],
+  data[[10]],
+  data[[11]],
+  data[[12]],
+  data[[13]],
+  data[[14]],
+  data[[15]],
+  data[[16]]) %>% 
+  mutate(date = ymd(date_collected)) %>% relocate(date) %>% select(-date_collected)
+```
+
+combine date-fixed data
+```{r}
+data <- bind_rows(d1, d2, d3) %>% select(1:10) %>% filter(!is.na(site)) %>%
+  mutate(zone = ecosystem)
 ```
 
 check on groupings
 
 ```{r}
-data %>% distinct(ecosystem)
+data %>% distinct(zone)
 ```
 
-BP = big prairie (open prairie 1; Pr-1)
-SP = small prairie (open prairie 2; Pr-2)
-NW = north wetlands (sloping open prairie; Wt-1)
-SW = south wetlands (wet prairie; Wt-2)
-EW = east woodlands (oak woodlands 1; Wd-1)
-WW = west woodlands (oak woodlands 2; Wd-2)
+SW-1 = swale 1 (eastern, lower)
+UP-1 = upland 2 (eastern, lower)
+SW-2 = swale 2 (western, higher)
+UP-2 = upland 2 (western, higher)
 
-
-# Wrangling
-
-- Change ecosystems to oak woodland, open prairie, wet prairie
-
-```{r wrangling}
-data <- data %>% 
-  mutate(cover = 
-  case_when(
-    ecosystem %in% c("BP", "SP") ~ "Pr",
-    ecosystem %in% c("EW", "WW") ~ "Wd", 
-    ecosystem %in% c("NW", "SW") ~ "Wt",
-    TRUE ~ NA
-  )) %>% 
-  mutate(site = 
-  case_when(
-    ecosystem == "BP" ~ 1,
-    ecosystem == "SP" ~ 2,
-    ecosystem == "NW" ~ 1,
-    ecosystem == "SW" ~ 2,
-    ecosystem == "EW" ~ 1,
-    ecosystem == "WW" ~ 2,
-    TRUE ~ NA
-  )) %>% 
-  select(gas, date, cover, site, transect, rep, flux, p.value, soil_moisture, soil_temperature)
-```
-
-# Flux QC 
+# Initial Slope-Flux QAQC and Calculation
 
 **Logic table:**
 
-Situation,                              CO2,  CH4,  N2O
-CO2 p > 0.05 or CO2 flux > 9*,           NA,   NA,   NA
-"CO2 is good, but CH4/N2O p > 0.05",    keep, 0,    0
-CO2 is good and CH4/N2O p ≤ 0.05,       keep, keep, keep
+Situation,                                  CO2,  CH4,  N2O
+CO2 flag == "bad" OR if slope is negative   NA,   NA,   NA
+CO2 flag == "ok", but CH4/N2O flag == "bad" keep, 0,    0
+CO2 flag == "ok", and CH4/N2O flag == "ok"  keep, keep, keep
 
 *Set very high woodland CO2 emissions (> 9) related to ant burrow to `NA`
 
 ```{r flux-qc}
 data <- data %>%
-  group_by(date, cover, site, transect, rep) %>%
+  group_by(date, site, zone, chamber_no) %>%
   mutate(
     # Extract the CO2 values for this chamber measurement
-    co2_p     = p.value[gas == "co2"][1],
-    co2_flux  = flux[gas == "co2"][1],
+    co2_flag   = flag[gas == "co2"][1],
+    co2_slope_ppm_min  = slope_ppm_min[gas == "co2"][1],
     
     # Flag bad analytical process / injection based on CO2
-    bad_injection = (is.na(co2_p) | co2_p > 0.05) | 
-                    (!is.na(co2_flux) & co2_flux > 9)
+    bad_injection = (is.na(co2_flag) | co2_flag == "bad") |
+                    co2_slope_ppm_min < 0
   ) %>%
   mutate(
-    flux = case_when(
+    slope_ppm_min = case_when(
       # Everything from a bad injection becomes NA
       bad_injection ~ NA_real_,
       
       # CO2 that passed the checks keeps its value
-      gas == "co2" ~ flux,
+      gas == "co2" ~ slope_ppm_min,
       
       # CH4 / N2O with non-significant slope → 0 (only if injection was good)
-      gas %in% c("ch4", "n2o") & p.value > 0.05 ~ 0,
+      gas %in% c("ch4", "n2o") & flag == "bad" ~ 0,
       
       # Otherwise keep the calculated flux
-      TRUE ~ flux
+      TRUE ~ slope_ppm_min
     )
   ) %>%
-  select(-co2_p, -co2_flux, -bad_injection) %>%
+  select(-co2_flag, -co2_slope_ppm_min, -bad_injection, -r2, -y_intercept, -flag, -Comment) %>%
   ungroup()
 ```
 
-# Add coords to create final tidy output dataset
+get chamber vols and temps
 
 ```{r}
-coords <- read_csv("2022-site-coords.csv")
-data %>%
-  mutate(site = as.character(site)) %>% 
-  unite(site, cover, site, sep = "-") %>% 
-  left_join(coords) %>% 
-  write_csv("2022-nachusa-fluxes.csv")
+vols <- read_csv("data/chamber_vols.csv") %>% select(site, zone = ecosystem, chamber_no, vol_m3 = total_vol_m3)
+temps <- read_csv("data/chamber_temps.csv") %>% select(date, site, zone = ecosystem_name, chamber_no, chamber_temp = average_temp_kelvin) %>% mutate(date = ymd(date))
 ```
+join to data
+fill NA temps with mean temp
+fill NA vols with mean vol
+
+```{r}
+data <- data %>% 
+  left_join(vols) %>% left_join(temps)
+
+mean(data$vol_m3, na.rm = T)
+mean(data$chamber_temp, na.rm = T)
+
+data <- data %>% 
+  mutate(vol_m3 = case_when(
+    is.na(vol_m3) ~ 0.0133,
+    TRUE ~ vol_m3
+  )) %>% 
+  mutate(chamber_temp = case_when(
+    is.na(chamber_temp) ~ 299.09,
+    TRUE ~ chamber_temp
+  ))
+```
+
+calculate fluxes
+
+```{r fluxes-ideal-gas}
+# Constants
+P_atm <- 1                      # assume 1 atm unless you have barometric data
+R     <- 8.205736e-5            # m3 atm mol-1 K-1
+diam_cm <- 25.4                 # chamber diameter
+area_m2 <- pi * (diam_cm / 100 / 2)^2   # 0.05067075 m2
+
+# flux_df should already have:
+# date, site, zone, chamber_no, gas, slope_ppm_min, vol_m3, chamber_temp (K)
+
+data <- data %>%
+  mutate(
+    gas = str_to_lower(gas),
+    area_m2 = area_m2,
+    # mol gas in chamber per ppm
+    mol_per_ppm = (P_atm * vol_m3) / (R * chamber_temp) * 1e-6,
+    # mol m-2 s-1
+    flux_mol_m2_s = mol_per_ppm * (slope_ppm_min / 60) / area_m2,
+    flux = case_when(
+      gas == "co2" ~ flux_mol_m2_s * 1e6,   # umol m-2 s-1
+      gas %in% c("ch4", "n2o") ~ flux_mol_m2_s * 1e9,  # nmol m-2 s-1
+      TRUE ~ NA_real_
+    ),
+    flux_units = case_when(
+      gas == "co2" ~ "umol m-2 s-1",
+      gas %in% c("ch4", "n2o") ~ "nmol m-2 s-1",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  select(date, site, zone, chamber_no, gas,
+         slope_ppm_min, vol_m3, chamber_temp, area_m2,
+         flux, flux_units)
+```
+
 
 ```{r detection-limit}
 # ============================================================
@@ -172,9 +243,33 @@ cat(sprintf("  Deployment time  = %.0f min\n", time_min))
 cat("  Temperature/pressure ≈ 25 °C, 1 atm\n")
 ```
 
+## Secondary QAQC using visual inspection against QCQA slope-calc. sheets
+- removes all N2O fluxes and extreme outliers
+
+### First, review data for extreme values using arrange
+
+```{r}
+data %>% 
+  filter(gas == "co2") %>% 
+  arrange(flux)
+```
+
+### next, retain only good data
+
+```{r}
+data <- data %>% 
+  filter(gas != "n2o") %>% 
+  mutate(flux = case_when(
+    gas == "ch4" & flux < -8 ~ NA,
+    gas == "ch4" & flux == 17.96017610 ~ NA,
+    TRUE ~ flux
+  ))
+  
+```
+
 # Data Summary
 
-# Overall stats
+## Overall stats
 
 ```{r num-obs}
 data %>% 
@@ -182,30 +277,36 @@ data %>%
   count(gas)
 ```
 
+# write tidy all fluxes
 
-```{r flux-dist, fig.width=8, fig.height=3}
+```{r}
+write_csv(data, "tidy-data/tidy-fluxes-all.csv")
+```
+
+
+
+```{r flux-dist, fig.width=6, fig.height=3}
 data %>% 
-  mutate(gas = fct_relevel(gas, "co2", "ch4", "n2o")) %>% 
+  mutate(gas = fct_relevel(gas, "co2", "ch4")) %>% 
   ggplot(aes(flux)) +
   geom_density(alpha = 0.6) +
   facet_wrap(~gas, 
              scales = "free",
              labeller = as_labeller(c(
     co2 = "CO[2]",
-    ch4 = "CH[4]",
-    n2o = "N[2]*O"
+    ch4 = "CH[4]"
   ), label_parsed)) +
   theme_classic() +
-  labs(x = expression(atop("GHG Flux", "("*mu*"mol CO"[2]*" m"^{-2}*" s"^{-1}*"), (nmol CH"[4]*" | N"[2]*"O m"^{-2}*" s"^{-1}*")")),
+  labs(x = expression(atop("GHG Flux", "("*mu*"mol CO"[2]*" m"^{-2}*" s"^{-1}*"), (nmol CH"[4]*" m"^{-2}*" s"^{-1}*")")),
        y = "Density") +
-  scale_fill_viridis_d() %>% 
+  scale_fill_viridis_d() +
   theme(
     strip.background = element_blank(),
     strip.text = element_text(
     size = 12,
     face = "bold"
   ))
-ggsave("paper-figures/figS1.png", height = 3, width = 8)
+ggsave("paper-figures/figS1.png", height = 3, width = 5)
 ```
 
 CO2 unimodal with long right tail
@@ -226,9 +327,9 @@ data %>%
 
 ```{r num-obs}
 data %>% 
-  filter(gas %in% c("co2", "n2o"),
+  filter(gas %in% c("co2"),
          !is.na(flux)) %>% 
-  group_by(gas, cover) %>% 
+  group_by(gas, zone) %>% 
   count(gas)
 ```
 
@@ -236,7 +337,7 @@ data %>%
 data %>% 
   filter(gas %in% c("ch4"),
          !is.na(flux)) %>% 
-  group_by(gas, cover, site) %>% 
+  group_by(gas, zone) %>% 
   count(gas)
 ```
 
@@ -246,178 +347,563 @@ data %>%
 - mean and standard deviation for N2O
 - by-site for CH4, aggregated for CO2 and N2O 
 
-```{r flux-dist, fig.width=8, fig.height=3}
-data %>% 
-  mutate(gas = fct_relevel(gas, "co2", "ch4", "n2o")) %>% 
-  ggplot(aes(flux, fill = cover)) +
-  geom_density(alpha = 0.6) +
-  facet_wrap(~gas, 
-             scales = "free",
-             labeller = as_labeller(c(
+```{r flux-dist, fig.width=9, fig.height=5}
+gas_labs <- as_labeller(
+  c(
     co2 = "CO[2]",
-    ch4 = "CH[4]",
-    n2o = "N[2]*O"
-  ), label_parsed)) +
+    ch4 = "CH[4]"
+  ),
+  default = label_parsed
+)
+
+data %>% 
+  mutate(gas = fct_relevel(gas, "co2", "ch4")) %>% 
+  ggplot(aes(flux, fill = zone)) +
+  geom_density(alpha = 0.6) +
+  facet_wrap(
+  ~ gas + zone,
+  scales = "free",
+  ncol = 4,
+  labeller = labeller(
+    gas = gas_labs,
+    zone = label_value
+  )) +
   theme_classic() +
-  labs(x = expression(atop("GHG Flux", "("*mu*"mol CO"[2]*" m"^{-2}*" s"^{-1}*"), (nmol CH"[4]*" | N"[2]*"O m"^{-2}*" s"^{-1}*")")),
+  labs(x = expression(atop("GHG Flux", "("*mu*"mol CO"[2]*" m"^{-2}*" s"^{-1}*"), (nmol CH"[4]*" m"^{-2}*" s"^{-1}*")")),
        y = "Density",
-       fill = "Cover") +
-  scale_fill_viridis_d(option = "magma") +
+       fill = "zone") +
+  scale_fill_viridis_d(option = "plasma") +
   theme(
     strip.background = element_blank(),
     strip.text = element_text(),
     size = 12,
     face = "bold"
   )
-ggsave("paper-figures/fig2.png", height = 3, width = 8)
+ggsave("paper-figures/figS2.png", height = 5, width = 9)
 ```
 
-CO2 fluxes for woodlands are unimodal and peak at 2-3 (smallest source)
-  (note, identified and removed outlier co2 flux in woodlands > 9)
-CO2 flues for wetlands and prairie are bimodal with peaks at 1.5 and 4 (larger sources)
+# Microtopographic zone effects
 
-CH4 fluxes for woodlands are bimodal with peaks at -1.5 and 0 (largest sink)
-CH4 fluxes for wetlands are bimodal with peaks at 1 and 0 (medium sink)
-CH4 fluxes for prairie are bimodal with peaks at 0.6 and 9 (weakest sink)
+Q: is there a significant zone effect?
 
-N2O fluxes for all cover types are unimodal around zero, with slightly positive skew, esp for prairie
+Problem with linear models: outliers may distort model behavior for CH4
+
+Check the effects with influence eval on full model with all data
+
+Flag outlier first
+```{r}
+ch4 <- data %>% filter(gas == "ch4", !is.na(flux))
+
+# A) global fence (what you used)
+q <- quantile(ch4$flux, c(0.25, 0.75), na.rm = TRUE)
+iqr <- diff(q)
+ch4_lower <- q[1] - 1.5 * iqr
+ch4_upper <- q[2] + 1.5 * iqr
+
+# B) zone-wise fence (matches left-column boxplots)
+ch4_flagged <- ch4 %>%
+  group_by(zone) %>%
+  mutate(
+    q1 = quantile(flux, 0.25, na.rm = TRUE),
+    q3 = quantile(flux, 0.75, na.rm = TRUE),
+    iqr_z = q3 - q1,
+    outlier_zone = flux < q1 - 1.5 * iqr_z | flux > q3 + 1.5 * iqr_z,
+    outlier_global = flux < ch4_lower | flux > ch4_upper,
+    direction = case_when(
+      flux > 0 ~ "emission",
+      flux < 0 ~ "uptake",
+      TRUE ~ "zero"
+    )
+  ) %>%
+  ungroup()
+
+ch4_flagged %>%
+  summarise(
+    n = n(),
+    n_zone = sum(outlier_zone),
+    n_global = sum(outlier_global),
+    pct_zone = 100 * n_zone / n,
+    pct_global = 100 * n_global / n
+  )
+```
+
+OK, more within-zone outliers than global, so within-zone is better flagger
 
 ```{r}
-data %>% 
-  filter(gas %in% c("co2", "n2o")) %>% 
-  group_by(gas, cover) %>% 
-    summarize(min = min(flux, na.rm = T),
-              q25 = quantile(flux, 0.25, na.rm = T),
-              median = median(flux, na.rm = T),
-              q75 = quantile(flux, 0.75, na.rm = T),
-              max = max(flux, na.rm = T))
+outliers <- ch4_flagged %>% filter(outlier_zone)
+
+# counts by zone and sign
+outliers %>%
+  count(zone, direction, name = "n") %>%
+  group_by(zone) %>%
+  mutate(pct_of_zone_outliers = 100 * n / sum(n))
+
+# are they clustered in time?
+outliers %>%
+  mutate(year = year(date),
+         month = month(date)) %>% 
+  count(zone, year, month, direction) %>%
+  arrange(year, month, zone)
+
+# magnitude
+outliers %>%
+  group_by(zone, direction) %>%
+  summarise(
+    n = n(),
+    min = min(flux),
+    median = median(flux),
+    max = max(flux),
+    .groups = "drop"
+  )
 ```
+
+# output tidy outliers
 
 ```{r}
-data %>% 
-  filter(gas %in% c("ch4")) %>% 
-  group_by(gas, cover, site) %>% 
-    summarize(min = min(flux, na.rm = T),
-              q25 = quantile(flux, 0.25, na.rm = T),
-              median = median(flux, na.rm = T),
-              q75 = quantile(flux, 0.75, na.rm = T),
-              max = max(flux, na.rm = T))
+write_csv(outliers, "tidy-data/outliers.csv")
 ```
 
 
-# Site effects
-
-Q: is there a significant site effect within cover types?
+Mostly emission outliers, and mostly in SW-1
 
 ```{r}
-data %>% 
-  filter(gas == "co2") %>% 
-  lm(flux ~ cover+factor(site), data = .) %>% 
-  summary()
+fit_all <- lm(flux ~ zone + factor(year) + factor(month),
+              data = filter(data, gas == "ch4") %>% 
+                mutate(year  = year(date),
+                       month = month(date)))
+
+fit_no  <- lm(flux ~ zone + factor(year) + factor(month),
+              data = ch4_flagged %>% 
+                mutate(year  = year(date),
+                       month = month(date)) %>% 
+                filter(!outlier_zone))
+              
+pairs(emmeans(fit_all, ~ zone), adjust = "tukey")
+pairs(emmeans(fit_no,  ~ zone), adjust = "tukey")
 ```
+
+check influence of outliers
 
 ```{r}
-data %>% 
-  filter(gas == "ch4") %>% 
-  lm(flux ~ cover+factor(site), data = .) %>% 
-  summary()
+diag <- broom::augment(fit_all) %>%
+  mutate(
+    cook_cut = 4 / n(),
+    student_cut = 3,
+    influential = .cooksd > cook_cut | abs(.std.resid) > student_cut
+  )
+
+diag %>%
+  filter(influential) %>%
+  count(zone)
+
+# compare
+lm(flux ~ zone + `factor(year)` + `factor(month)`,
+   data = diag %>% filter(!influential))
 ```
+
+
+## Interpretation of outlier analysis
+
+Of 212 CH₄ fluxes, 29 (14%) fell outside a zone-wise 1.5×IQR fence. These were not clustered on a single date: 19 were in SW-1 (11 emission, 8 uptake), 5 were strong 2022 uptake in UP-1, and 5 were in SW-2 or UP-2. A global 1.5×IQR fence flagged 20 points (9%). SW-1’s high outlier count reflects a near-zero IQR at or below the CH₄ detection limit (0.55 nmol m⁻² s⁻¹), not erroneous chambers. These IQR flags were used only to describe the tails and to examine how they inflate residual variance in the linear model (Table Sx). They were not used as an exclusion rule. Influence diagnostics identified three points (two SW-1, one SW-2) with Cook’s D > 4/n or |studentized residual| > 3. Only those three observations were removed before fitting the CH₄ model and Tukey HSD tests.
+
+### influential points
+
 ```{r}
-data %>% 
-  filter(gas == "n2o") %>% 
-  lm(flux ~ cover+factor(site), data = .) %>% 
-  summary()
+outliers %>%
+  group_by(zone, direction) %>%
+  summarise(
+    n = n(),
+    min = min(flux), median = median(flux), max = max(flux),
+    .groups = "drop"
+  )
+
+# the only points that matter for the lm
+diag %>%
+  filter(influential) %>%
+  select(zone, year = `factor(year)`, month = `factor(month)`, flux, .std.resid, .cooksd)
 ```
 
-# Q2 - Spatiotemporal models with moisture and tempertaure
 
-```{r temp-moisture-pattern}
-data %>% 
-  filter(!is.na(date)) %>% 
-  select(date, cover, soil_moisture, soil_temperature) %>% 
-  pivot_longer(3:4, names_to = "soil_var") %>% 
-  mutate(soil_var = fct_relevel(soil_var, "soil_temperature", "soil_moisture")) %>% 
-  ggplot(aes(x = factor(date), y = value, color = cover)) +
-  geom_boxplot() +
-  facet_wrap(~soil_var, 
+```{r}
+lm_data <- data %>% 
+  mutate(flux = case_when(
+    gas == "ch4" & flux > 17 ~ NA,
+    TRUE ~ flux
+  ))
+```
+
+# write tidy lm-fluxes (after outlier removal)
+
+```{r}
+write_csv(lm_data, "tidy-data/lm-fluxes.csv")
+```
+
+
+```{r plot-lm}
+lm_data %>% 
+  mutate(gas = fct_relevel(gas, "co2", "ch4")) %>% 
+  ggplot(aes(flux)) + 
+  geom_density() +
+  facet_wrap(~gas, 
              scales = "free",
              labeller = as_labeller(c(
-    soil_moisture = "Soil Moisture",
-    soil_temperature = "Soil Temperature"
-  ))) +
+    co2 = "CO[2]",
+    ch4 = "CH[4]"
+  ), label_parsed)) +
   theme_classic() +
-  labs(y = expression(atop("Temp. ("*degree*"C)", "Moisture (%)")),
-       x = "Sampling Date (monthly)",
-       color = "Cover") +
-  scale_fill_viridis_d() %>% 
+  labs(x = expression(atop("GHG Flux", "("*mu*"mol CO"[2]*" m"^{-2}*" s"^{-1}*"), (nmol CH"[4]*" m"^{-2}*" s"^{-1}*")")),
+       y = "Density") +
+  scale_fill_viridis_d() +
   theme(
     strip.background = element_blank(),
     strip.text = element_text(
     size = 12,
     face = "bold"
   ))
-ggsave("paper-figures/fig2.png", height = 3, width = 8)
+ggsave("paper-figures/figS3.png", height = 3, width = 6)
+```
+
+```{r num-obs}
+lm_data %>% 
+  filter(!is.na(flux)) %>% 
+  count(gas)
+```
+
+# linear models for fluxes removing distoring March 2023 date (analyze separately)
+
+```{r}
+lm_data %>% 
+  mutate(year = year(date),
+         month = month(date)) %>% 
+  filter(gas == "co2") %>% 
+  mutate(flux = case_when(
+    year == 2023 & month == 3 ~ NA,
+    TRUE ~ flux
+  )) %>% 
+  lm(flux ~ zone+factor(year)+factor(month), data = .) %>% 
+  summary()
+```
+
+```{r}
+lm_data %>% 
+  mutate(year = year(date),
+         month = month(date)) %>% 
+  filter(gas == "ch4") %>% 
+  mutate(flux = case_when(
+    year == 2023 & month == 3 ~ NA,
+    TRUE ~ flux
+  )) %>% 
+  lm(flux ~ zone+factor(year)+factor(month), data = .) %>% 
+  summary()
+```
+## Tukey's HSD for main figure
+
+make temp data with factors
+
+```{r}
+tukey_dat <- lm_data %>% 
+  mutate(year = year(date),
+   month = month(date)) %>% 
+  mutate(flux = case_when(
+    year == 2023 & month == 3 ~ NA,
+    TRUE ~ flux
+  )) %>% 
+  mutate(year  = factor(year),
+    month = factor(month))
+
+tukey_dat_co2 <- tukey_dat %>% 
+  filter(gas == "co2")
+
+tukey_dat_ch4 <- tukey_dat %>% 
+  filter(gas == "ch4")
+
+fit_co2 <- lm(flux ~ zone + year + month, data = tukey_dat_co2)
+fit_ch4 <- lm(flux ~ zone + year + month, data = tukey_dat_ch4)
+```
+
+# output tukey data
+
+```{r}
+write_csv(tukey_dat, "tidy-data/tukey-fluxes.csv")
+```
+
+
+```{r}
+emmeans(fit_co2, ~ zone) %>%
+  pairs(adjust = "tukey")
+```
+
+```{r}
+emmeans(fit_ch4, ~ zone) %>%
+  pairs(adjust = "tukey")
+```
+
+## GHG flux by zone, and over time (main paper figure)
+
+```{r fig.width= 4, fig.height = 6}
+lm_data %>% 
+  mutate(gas = fct_relevel(gas, "co2", "ch4")) %>% 
+  ggplot(aes(x = zone, y = flux, fill = zone)) + 
+  geom_boxplot(alpha = 0.7) +
+  facet_wrap(~gas, 
+             ncol = 1,
+             scales = "free",
+             labeller = as_labeller(c(
+    co2 = "CO[2]",
+    ch4 = "CH[4]"
+  ), label_parsed)) +
+  theme_classic() +
+  labs(y = expression(atop("GHG Flux", "("*mu*"mol CO"[2]*" m"^{-2}*" s"^{-1}*"), (nmol CH"[4]*" m"^{-2}*" s"^{-1}*")")),
+       x = "Microtopo. Zone") +
+  scale_fill_viridis_d(option = "plasma") +
+  theme(
+    strip.background = element_blank(),
+    strip.text = element_text(
+    size = 12,
+    face = "bold"
+  ))
+ggsave("paper-figures/fig2a.png", height = 6, width = 4)
+```
+```{r fig.width= 4, fig.height = 6}
+lm_data %>% 
+  mutate(gas = fct_relevel(gas, "co2", "ch4"),
+         month = month(date),
+         year = year(date)) %>% 
+  unite(yr_mo, year, month, sep = "-") %>% 
+  ggplot(aes(x = factor(yr_mo), y = flux, fill = zone)) + 
+  geom_boxplot(alpha = 0.7) +
+  facet_wrap(~gas, 
+             ncol = 1,
+             scales = "free",
+             labeller = as_labeller(c(
+    co2 = "CO[2]",
+    ch4 = "CH[4]"
+  ), label_parsed)) +
+  theme_classic() +
+  labs(y = expression(atop("GHG Flux", "("*mu*"mol CO"[2]*" m"^{-2}*" s"^{-1}*"), (nmol CH"[4]*" m"^{-2}*" s"^{-1}*")")),
+       x = "Year-Month") +
+  scale_fill_viridis_d(option = "plasma") +
+  scale_x_discrete("Year-Month",
+                   limits =
+                     c("2022-7",
+                       "2022-8",
+                       "2022-9",
+                       "2022-10",
+                       "2023-3",
+                       "2023-5",
+                       "2023-6",
+                       "2023-7",
+                       "2023-8")) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    strip.background = element_blank(),
+    strip.text = element_text(
+    size = 12,
+    face = "bold"
+  ))
+ggsave("paper-figures/fig2b.png", height = 6, width = 4)
+```
+
+
+# Q2 - Spatiotemporal models with moisture and temperature
+
+read in all env data:
+
+   * soil temp and moist
+
+```{r 2022-soil}
+env_data <- 
+  read_csv("env-data/soil/complete-data-template-22.csv") %>% 
+  select(
+    date = Date, 
+    zone = Plot, 
+    chamber_no = Chamber,
+    soil_moist = `Sensor Soil Moisture (%)`,
+    soil_temp = `Soil Temperature (C)`,
+    plant_cover = `Plant Cover (%)`) %>% 
+  mutate(date = mdy(date),
+         zone = case_when(
+           zone == "Swale-1" ~ "SW-1",
+           zone == "Swale-2" ~ "SW-2",
+           zone == "Upland-1" ~ "UP-1",
+           zone == "Upland-2" ~ "UP-2",
+           TRUE ~ zone
+         ),
+         plant_cover = case_when(
+           plant_cover == "<5" ~ "0",
+           plant_cover == "< 5" ~ "0",
+           TRUE ~ plant_cover
+         ),
+         soil_moist = as.numeric(soil_moist),
+         soil_temp = as.numeric(soil_temp),
+         plant_cover = as.numeric(plant_cover))
+```
+
+```{r 2023-soil}
+env_data_2 <- 
+  read_csv("env-data/soil/soil_moist_temp23.csv",
+           na = "na") %>% 
+  select(
+    date = date, 
+    zone_chamber = chamber, 
+    soil_moist = soil_moist_percent,
+    soil_temp = soil_temp_c,
+    plant_cover = plant_cover_percent) %>% 
+  separate_wider_delim(zone_chamber, "-", names = c("zone", "chamber_no")) %>% 
+  mutate(date = mdy(date),
+         zone = case_when(
+           zone == "SW 1" ~ "SW-1",
+           zone == "SW 2" ~ "SW-2",
+           zone == "UP 1" ~ "UP-1",
+           zone == "UP 2" ~ "UP-2",
+           TRUE ~ zone
+         ),
+         plant_cover = case_when(
+           plant_cover == "<5" ~ "0",
+           plant_cover == "< 5" ~ "0",
+           TRUE ~ plant_cover
+         ),
+         soil_moist = as.numeric(soil_moist),
+         soil_temp = as.numeric(soil_temp),
+         plant_cover = as.numeric(plant_cover),
+         chamber_no = as.numeric(chamber_no))
+```
+bind years
+
+```{r}
+env_data <- env_data %>% bind_rows(env_data_2)
+```
+
+# soil moisture and temperature QCQA 
+
+there seem to be some strange values. I will filter so that the soil temp/moisture is NA if > 3 s3 from the mean
+
+```{r}
+env_data_qcqa <- env_data %>% 
+  group_by(date, zone) %>% 
+  summarise(moist_upper = mean(soil_moist) + 3 * sd(soil_moist)/sqrt(4),
+            moist_lower = mean(soil_moist) - 3 * sd(soil_moist)/sqrt(4),
+            temp_upper = mean(soil_temp) + 3 * sd(soil_temp)/sqrt(4),
+            temp_lower = mean(soil_temp) - 3 * sd(soil_temp)/sqrt(4)
+            ) 
+```
+
+```{r}
+env_data %>% 
+  left_join(env_data_qcqa) %>% 
+  mutate(
+    soil_moist = case_when(
+      soil_moist > moist_upper ~ NA,
+      soil_moist < moist_lower ~ NA,
+      TRUE ~ soil_moist),
+    
+    soil_temp = case_when(
+      soil_temp > temp_upper ~ NA,
+      soil_temp < temp_lower ~ NA,
+      TRUE ~ soil_temp))
+```
+
+
+join to fluxes
+
+```{r}
+data_soil <- lm_data %>% 
+  left_join(env_data) 
+```
+
+```{r temp-moisture-pattern, fig.height = 3, fig.width = 7}
+data_soil %>% 
+  filter(!is.na(date)) %>% 
+  mutate(plant_cover = case_when(
+           date == "2023-05-18" ~ NA,
+           TRUE ~ plant_cover),
+         gas = fct_relevel(gas, "co2", "ch4"),
+         month = month(date),
+         year = year(date)) %>% 
+  unite(yr_mo, year, month, sep = "-") %>% 
+  select(yr_mo, zone, soil_moist, soil_temp) %>% 
+  pivot_longer(3:4, names_to = "soil_var") %>% 
+  mutate(soil_var = fct_relevel(soil_var, "soil_temp", "soil_moist", "plant_cover")) %>% 
+  ggplot(aes(x = factor(yr_mo), y = value, fill = zone)) +
+  geom_boxplot(outlier.color = "grey",
+               outlier.size = 0.5) +
+  facet_wrap(
+        ~ soil_var, 
+        ncol = 3, 
+        scales = "free", 
+        labeller = labeller(
+          soil_var = as_labeller(c(
+            soil_moist  = "Soil Moisture", 
+            soil_temp   = "Soil Temperature", 
+            plant_cover = "Plant Cover"
+          ))
+        )
+      ) +
+  theme_classic() +
+  labs(y = expression(atop("Temp. ("*degree*"C)", "Moisture (%)")),
+       fill = "Zone") +
+  scale_fill_viridis_d(option = "G") +
+    scale_x_discrete("Year-Month",
+                   limits =
+                     c("2022-7",
+                       "2022-8",
+                       "2022-9",
+                       "2022-10",
+                       "2023-3",
+                       "2023-5",
+                       "2023-6",
+                       "2023-7",
+                       "2023-8")) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    strip.background = element_blank(),
+    strip.text = element_text(
+    size = 12,
+    face = "bold"
+  ))
+ggsave("paper-figures/fig3.png", height = 3, width = 7)
 ```
 # Soil temp and moisture summary table (Table S2)
 
 
 ```{r}
-data %>%  
-  filter(!is.na(date)) %>% 
-  select(date, cover, soil_moisture, soil_temperature) %>% 
-  group_by(date) %>% 
-  summarize(mean_soil_t = mean(soil_temperature, na.rm = T),
-            sd_soil_t = sd(soil_temperature, na.rm = T),
-            mean_soil_moist = mean(soil_moisture, na.rm = T),
-            sd_soil_moist = sd(soil_moisture, na.rm = T)) 
+write_csv(data_soil, "tidy-data/soil_temp_moist.csv")
 ```
 
 
 ```{r}
-data %>%  
-  filter(!is.na(date)) %>% 
-  select(date, cover, soil_moisture, soil_temperature) %>% 
-  group_by(date, cover) %>% 
-  summarize(mean_soil_t = mean(soil_temperature, na.rm = T),
-            sd_soil_t = sd(soil_temperature, na.rm = T),
-            mean_soil_moist = mean(soil_moisture, na.rm = T),
-            sd_soil_moist = sd(soil_moisture, na.rm = T)) 
-  
+data_soil %>%
+  filter(!is.na(date)) %>%
+  select(date, zone, soil_moist, soil_temp) %>%
+  group_by(date) %>%
+  summarize(
+    mean_soil_t     = mean(soil_temp, na.rm = TRUE),
+    sd_soil_t       = sd(soil_temp, na.rm = TRUE),
+    mean_soil_moist = mean(soil_moist, na.rm = TRUE),
+    sd_soil_moist   = sd(soil_moist, na.rm = TRUE),
+    .groups = "drop"
+  )
 ```
 
-## Temperate ranges within 10-25 C
-
 ```{r}
-data %>% 
-  count(gas == "co2" & soil_temperature < 10 | soil_temperature > 25) 
-55/593*100
+data_soil %>%
+  filter(!is.na(date)) %>%
+  select(date, zone, soil_moist, soil_temp) %>%
+  group_by(zone) %>%
+  summarize(
+    mean_soil_t     = mean(soil_temp, na.rm = TRUE),
+    sd_soil_t       = sd(soil_temp, na.rm = TRUE),
+    mean_soil_moist = mean(soil_moist, na.rm = TRUE),
+    sd_soil_moist   = sd(soil_moist, na.rm = TRUE),
+    .groups = "drop"
+  )
 ```
 
-## Temperature ranges for woodlands
 
-```{r}
-data %>% 
-    filter(gas == "co2" & soil_temperature > 25 & cover == "Wd") %>% 
-  summarize(count = n(),
-            mean_soil_t = mean(soil_temperature),
-            mean_soil_m = mean(soil_moisture))
-```
-
-## Highest temp-moisture combination in wet prairie
-
-```{r}
-data %>% 
-  filter(gas == "co2" & date == "2022-08-18") %>% 
-  group_by(cover) %>% 
-  summarize(soil_t = max(soil_temperature, na.rm = T),
-            soil_m = max(soil_moisture, na.rm = T))
-``` 
-
-
-```{r fig.height = 4.5, fig.width = 11}
-data %>% 
-  mutate(gas = fct_relevel(gas, "co2", "ch4", "n2o")) %>% 
-  ggplot(aes(x = soil_temperature, y = flux, shape = cover, color = soil_moisture)) +
+```{r fig.height = 4, fig.width = 8}
+data_soil %>% 
+  mutate(gas = fct_relevel(gas, "co2", "ch4")) %>% 
+  ggplot(aes(x = soil_temp, y = flux, shape = zone, color = soil_moist)) +
   geom_point(alpha = 0.6, size = 3) +
   facet_wrap(~gas, 
              scales = "free",
@@ -427,9 +913,11 @@ data %>%
     n2o = "N[2]*O"
   ), label_parsed)) +
   theme_classic() +
-  labs(y = expression(atop("GHG Flux", "("*mu*"mol CO"[2]*" m"^{-2}*" s"^{-1}*"), (nmol CH"[4]*" / N"[2]*"O m"^{-2}*" s"^{-1}*")")),
+  labs(y = expression(atop("GHG Flux", "("*mu*"mol CO"[2]*" m"^{-2}*" s"^{-1}*"), (nmol CH"[4]*" m"^{-2}*" s"^{-1}*")")),
        x = expression("Soil Temp. (C)"),
-       fill = "Cover") +
+       fill = "Zone",
+       shape = "Zone",
+       color = "Moisture") +
   scale_fill_viridis_c() %>% 
   theme(
     strip.background = element_blank(),
@@ -437,7 +925,7 @@ data %>%
     size = 12,
     face = "bold"
   ))
-ggsave("paper-figures/figS2.png", height = 3, width = 8)
+ggsave("paper-figures/figS4.png", height = 3, width = 8)
 ```
 
 # Use 3D plot -- only for exploration
@@ -469,27 +957,434 @@ ggsave("paper-figures/figS2.png", height = 3, width = 8)
 #   )
 ```
 
+# Soil Texture and %C Data - calculate carbon stocks
+
+```{r}
+texture <- read_csv("env-data/soil/soil_texture23.csv") %>% 
+  select(zone = plot, depth = depth_cm, sand, silt, clay) %>% 
+    mutate(zone = case_when(
+           zone == "Swale-1" ~ "SW-1",
+           zone == "Swale-2" ~ "SW-2",
+           zone == "Upland-1" ~ "UP-1",
+           zone == "Upland-2" ~ "UP-2",
+           TRUE ~ zone
+         ),
+         depth = case_when(
+           depth == "0-10" ~ "0",
+           depth == "second" ~ "10",
+           depth == "20-30" ~ "20",
+           depth == "30-40" ~ "30",
+           depth == "40-50" ~ "40",
+           depth == "50-60" ~ "50",
+           depth == "60-70" ~ "60",
+           depth == "70-80" ~ "70",
+           depth == "80-90" ~ "80",
+           depth == "90-100" ~ "90")) 
+```
+
+# PARIO texture QCQA
+
+Sample, Sieve sand, PARIO sand / silt / clay, Class in sheet,       Call
+SW1     80–90,      6.0%,75.1 / 24.9 / 0,     Loamy Sand,           Fail — do not use
+SW2     50–60,      6.4%,23.4 / 76.6 / 0,     Silt Loam,            Fail — do not use
+UP1     0–10,     5.5%,24.2 / 63.9 / 11.9,    Silt Loam,            Fail
+UP1     40–50,      2.5%,14.1 / 77.8 / 8.1,   Silt Loam,            Fail
+UP2     20–30,      4.6%,15.9 / 78.9 / 5.1,   Silt Loam,            Fail
+UP2     0–10,     6.0%,0 / 55.4 / 44.5,       Silty Loam,           Suspect (sieve sand ignored or not entered)
+UP1     90–100,     4.8%,5.2 / 40.5 / 54.3,   listed as Silty Loam, Numbers OK; label wrong (this is silty clay)
+
+# cn data
+
+```{r}
+cn_data <- read_csv("env-data/soil/cn_result_23.csv") %>% 
+  select(zone = plot, depth = depth_cm, carbon = avg_carbon, nitrogen = avg_nitrogen) %>% 
+     mutate(zone = case_when(
+           zone == "SW 1" ~ "SW-1",
+           zone == "SW 2" ~ "SW-2",
+           zone == "UP 1" ~ "UP-1",
+           zone == "UP 2" ~ "UP-2",
+           TRUE ~ zone
+         ),
+         depth = as.character(depth)) %>% 
+  filter(!is.na(depth))
+
+```
+
+# combine texture and CN data
+
+```{r}
+c_stocks <- texture %>% left_join(cn_data)
+```
+
+# write c stocks data
+
+```{r}
+write_csv(c_stocks, "tidy-data/soc-stocks.csv")
+```
+
+# PARIO Filtering bad rows, replace with adjacent layer means
+
+```{r replace-bad-texture}
+# Failed / suspect layers from the PARIO QC
+# SW-1 80, SW-2 50, UP-1 0, UP-1 40, UP-2 0 (suspect), UP-2 20
+bad <- tibble(
+  zone  = c("SW-1", "SW-2", "UP-1", "UP-1", "UP-2", "UP-2"),
+  depth = c(80,     50,     0,      40,     0,      20)
+)
+
+neighbor_mean <- function(dat, z, d) {
+  nbr <- dat |>
+    filter(zone == z, depth %in% c(d - 10, d + 10))
+  if (nrow(nbr) == 0) {
+    stop("No adjoining layers for ", z, " depth ", d)
+  }
+  nbr |>
+    summarise(
+      sand = mean(sand),
+      silt = mean(silt),
+      clay = mean(clay)
+    )
+}
+
+fixed <- c_stocks
+for (i in seq_len(nrow(bad))) {
+  z <- bad$zone[i]
+  d <- bad$depth[i]
+  repl <- neighbor_mean(c_stocks, z, d)   # means from the original (unedited) table
+  fixed <- fixed |>
+    mutate(
+      sand = ifelse(zone == z & depth == d, repl$sand, sand),
+      silt = ifelse(zone == z & depth == d, repl$silt, silt),
+      clay = ifelse(zone == z & depth == d, repl$clay, clay)
+    )
+}
+
+# sanity check: only those 6 rows should change, and only texture
+compare <- c_stocks |>
+  inner_join(fixed, by = c("zone", "depth"), suffix = c("_old", "_new")) |>
+  filter(sand_old != sand_new | silt_old != silt_new | clay_old != clay_new) |>
+  select(zone, depth, starts_with("sand"), starts_with("silt"), starts_with("clay"))
+
+compare
+
+# write if you want a new file
+write_csv(fixed, "tidy-data/soc-stocks-texture-filled.csv")
+```
+
+
+# fig6 - soil texture A - cn plots B
+
+```{r fig.width= 9, fig.height = 4}
+tex <- fixed %>%
+  mutate(
+    depth_top = as.numeric(as.character(depth)),
+    depth_bot = depth_top + 10,
+    zone = factor(zone, levels = c("SW-1", "UP-1", "SW-2", "UP-2")),
+    tot = sand + silt + clay,
+    sand = 100 * sand / tot,
+    silt = 100 * silt / tot,
+    clay = 100 * clay / tot
+  ) %>%
+  select(-tot) %>%
+  pivot_longer(c(sand, silt, clay), names_to = "fraction", values_to = "pct") %>%
+  mutate(fraction = factor(fraction, levels = c("sand", "silt", "clay"))) %>%
+  group_by(zone, depth_top) %>%
+  arrange(fraction, .by_group = TRUE) %>%
+  mutate(
+    xmin = cumsum(lag(pct, default = 0)),
+    xmax = xmin + pct
+  ) %>%
+  ungroup()
+
+ggplot(tex, aes(xmin = xmin, xmax = xmax, ymin = depth_top, ymax = depth_bot, fill = fraction)) +
+  geom_rect(color = "white", linewidth = 0.6) +
+  scale_y_reverse(breaks = seq(0, 90, by = 10), expand = c(0, 0)) +
+  scale_x_continuous(
+    breaks = seq(0, 100, by = 25),
+    labels = function(x) paste0(x, "%"),
+    expand = c(0, 0)
+  ) +
+  coord_cartesian(xlim = c(0, 100), ylim = c(100, 0), expand = FALSE) +
+  scale_fill_manual(
+    values = c(sand = "#E2C36B", silt = "#A3A38A", clay = "#8C4A32"),
+    labels = c("Sand", "Silt", "Clay")
+  ) +
+  facet_wrap(~zone, ncol = 4) +
+  labs(x = "Particle-size fraction", y = "Depth (cm)", fill = NULL) +
+  theme_classic(base_size = 12) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.spacing.x = unit(0.8, "lines"),
+    strip.background = element_blank(),
+    legend.position = "bottom"
+  )
+ggsave("paper-figures/fig6.png", height = 4, width = 9)
+```
+
+# bulk density estimation method
+
+```{r}
+set.seed (12567)
+
+library(randomForestSRC)
+library(ggplot2)
+library(scales)
+library(grid)
+library(gridExtra)
+library(clhs)
+library(caret)
+library(terra)
+
+########## Import the package dataset to build PTF
+load("env-data/soil/Geo_Peds06132016.Rda")
+
+#Subset pedons for depth less than 200 cm
+Peds_200 <- subset(Geo_Peds, Geo_Peds$depth <= 200)
+
+# Extract BD model variables
+fm = bd ~ soc + ph_h2o + sand + clay + depth + structsize + structtype + surf_geology + province + hzn_desg
+
+## Missing values distribution:
+sel <- (Peds_200[,all.vars(fm)])
+summary(sel)
+
+# Extract complete cases for comparison
+sel.complete <- complete.cases(sel)
+summary(sel.complete)
+
+## 41,878 complete (or 20%)
+Peds_complete <- sel[sel.complete,]
+
+# Create latin hypercube sample with 50% of complete data (50% selected for speed)
+cs <- clhs(Peds_complete, size  = nrow(Peds_complete)/2, progress = FALSE, simple = FALSE)
+
+# Create calibration dataframe of latin hypercube samples
+calib_data <- cs$sampled_data
+rfsrc_BD <- rfsrc(fm, data=calib_data, ntree=150)
+```
+
+# Run the model with francois 2022-2023 texture data
+
+```{r}
+soil_data_francois <- read_csv("env-data/soil/data_for_bulk_density.csv") %>% 
+   rename(zone = plot) %>% 
+    mutate(zone = case_when(
+           zone == "sw_1" ~ "SW-1",
+           zone == "sw-2" ~ "SW-2",
+           zone == "upland-1" ~ "UP-1",
+           zone == "upland-2" ~ "UP-2",
+           TRUE ~ zone
+         ),
+         depth = as.character(depth),
+         depth = case_when(
+           depth == "10" ~ "0",
+           depth == "20" ~ "10",
+           depth == "30" ~ "20",
+           depth == "40" ~ "30",
+           depth == "50" ~ "40",
+           depth == "60" ~ "50",
+           depth == "70" ~ "60",
+           depth == "80" ~ "70",
+           depth == "90" ~ "80",
+           depth == "100" ~ "90")) %>% 
+  select(-soc, -sand, -clay) %>% 
+  left_join(fixed) %>% select(-silt) %>% 
+  left_join(cn_data) %>% select(-nitrogen) %>% rename(soc = carbon) %>% 
+    mutate(zone = factor(zone),
+         depth = factor(depth),
+         province = factor(province),
+         surf_geology = factor(surf_geology),
+         hzn_desg = factor(hzn_desg),
+         structtype = factor(structtype),
+         structsize = factor(structsize))
+  
+
+bd_predict_francois <- predict.rfsrc(rfsrc_BD, newdata = soil_data_francois) 
+bd_predictions <- bd_predict_francois$predicted %>% as_tibble() %>% rename(db_francois = value) %>% bind_cols(soil_data_francois)
+```
+
+# calcualte SOC stocks by layer
+
+```{r}
+bd_predictions %>% 
+  select(zone, depth, db_francois) %>% 
+  left_join(cn_data) %>% select(-nitrogen) %>% 
+  mutate(c_stock_g_cm3 = db_francois*carbon/100,
+         c_stock_Mg_ha = c_stock_g_cm3*10^3)
+```
+
+```{r}
+bd <- bd_predictions %>%          # or use the object you already have
+  mutate(
+    zone = factor(zone, levels = c("SW-1", "SW-2", "UP-1", "UP-2")),
+    depth_neg = -as.numeric(as.character(depth))
+  )
+
+ggplot(bd, aes(x = db_francois, y = depth_neg, shape = zone)) +
+  geom_point(size = 2.6, stroke = 0.7) +
+  scale_shape_manual(
+    name = "Microtopography",
+    values = c("SW-1" = 16, "SW-2" = 17, "UP-1" = 15, "UP-2" = 3),
+    labels = c("SW 1", "SW 2", "UP 1", "UP 2")
+  ) +
+  scale_x_continuous(
+    name = expression("Bulk Density (g cm"^{-3}*")"),
+    limits = c(0.8, 1.5),
+    breaks = seq(0, 1.5, by = 0.25)
+  ) +
+  scale_y_continuous(
+    name = "Depth (cm)",
+    breaks = c(0, -25, -50, -75),
+    expand = expansion(mult = c(0.04, 0.04))
+  ) +
+  ggtitle("Soil Dry Bulk Density 0-100 cm") +
+  theme_classic(base_size = 12) +
+  theme(
+    plot.title = element_text(hjust = 0, size = 12),
+    legend.title = element_text(size = 11),
+    legend.position = "right",
+    legend.background = element_blank()
+  )
+ggsave("paper-figures/Fig7a.png", height = 4, width = 4)
+```
+
+
+```{r}
+cn <- read_csv("env-data/soil/cn_data_final.csv") %>%          # or use the object you already have
+  mutate(
+    zone = factor(zone, levels = c("SW-1", "SW-2", "UP-1", "UP-2")),
+    depth_neg = -as.numeric(depth)
+  )
+
+ggplot(cn, aes(x = carbon, y = depth_neg, shape = zone)) +
+  geom_point(size = 2.6, stroke = 0.7) +
+  scale_shape_manual(
+    name = "Microtopography",
+    values = c("SW-1" = 16, "SW-2" = 17, "UP-1" = 15, "UP-2" = 3),
+    labels = c("SW 1", "SW 2", "UP 1", "UP 2")
+  ) +
+  scale_x_continuous(
+    name = "Carbon (%)",
+    limits = c(0, NA),
+    breaks = seq(0, 8, by = 2),
+    expand = expansion(mult = c(0, 0.05))
+  ) +
+  scale_y_continuous(
+    name = "Depth (cm)",
+    breaks = c(0, -25, -50, -75),
+    expand = expansion(mult = c(0.04, 0.04))
+  ) +
+  ggtitle("Soil carbon 0 -100 cm") +
+  theme_classic(base_size = 12) +
+  theme(
+    plot.title = element_text(hjust = 0, size = 12),
+    legend.title = element_text(size = 11),
+    legend.position = "right",
+    legend.background = element_blank()
+  )
+ggsave("paper-figures/Fig7b.png", height = 4, width = 4)
+```
+
+```{r}
+stocks <- bd_predictions %>% 
+  select(zone, depth, db_francois) %>% 
+  left_join(cn_data) %>% select(-nitrogen) %>% 
+  mutate(c_stock_g_cm3 = db_francois*carbon/100,
+         c_stock_Mg_ha = c_stock_g_cm3*10^3) %>%         
+  mutate(
+    zone = factor(zone, levels = c("SW-1", "SW-2", "UP-1", "UP-2")),
+    depth_neg = -as.numeric(as.character(depth))
+  )
+
+
+write_csv(stocks, "tidy-data/soc-stocks.csv")
+
+ggplot(stocks, aes(x = c_stock_Mg_ha, y = depth_neg, shape = zone)) +
+  geom_point(size = 2.6, stroke = 0.7) +
+  scale_shape_manual(
+    name = "Microtopography",
+    values = c("SW-1" = 16, "SW-2" = 17, "UP-1" = 15, "UP-2" = 3),
+    labels = c("SW 1", "SW 2", "UP 1", "UP 2")
+  ) +
+  scale_x_continuous(
+    name = expression("Carbon Stock (Mg ha"^-1*")"),
+    limits = c(0, NA),
+    breaks = seq(0, 80, by = 10),
+    expand = expansion(mult = c(0, 0.05))
+  ) +
+  scale_y_continuous(
+    name = "Depth (cm)",
+    breaks = c(0, -25, -50, -75),
+    expand = expansion(mult = c(0.04, 0.04))
+  ) +
+  ggtitle("Soil Carbon Stock 0-100 cm") +
+  theme_classic(base_size = 12) +
+  theme(
+    plot.title = element_text(hjust = 0, size = 12),
+    legend.title = element_text(size = 11),
+    legend.position = "right",
+    legend.background = element_blank()
+  )
+ggsave("paper-figures/Fig7c.png", height = 4, width = 4)
+```
+
+# calcualte SOC stocks by profile
+
+```{r}
+bd_predictions %>% 
+  select(zone, depth, db_francois) %>% 
+  left_join(cn_data) %>% select(-nitrogen) %>% 
+  mutate(c_stock_g_cm3 = db_francois*carbon/100,
+         c_stock_Mg_ha = c_stock_g_cm3*10^3) %>% 
+  group_by(zone) %>% 
+  summarize(c_stock_Mg_ha = sum(c_stock_Mg_ha))
+```
+
+
+get to 30 cm summaries for the decision tree modeling
+
+```{r}
+texture_summary <- fixed %>% 
+  filter(depth %in% c("0", "10", "20")) %>% 
+  group_by(zone) %>% 
+  summarize(sand = mean(sand, na.rm = T),
+            silt = mean(silt, na.rm = T),
+            clay = mean(clay, na.rm = T))
+
+# join to flux data
+data_soil <- data_soil %>% left_join(texture_summary) 
+
+
+cn_summary <- cn_data %>% 
+  filter(depth %in% c("0", "10", "20")) %>% 
+  group_by(zone) %>% 
+  summarize(carbon = mean(carbon),
+            nitrogen = mean(nitrogen))
+
+data_soil <- data_soil %>% left_join(cn_summary)
+```
+
 ```{r co2-decision-tree}
-d <- data %>%
+d <- data_soil %>%
   filter(gas == "co2") %>%
   mutate(
-    cover = factor(cover),
-    site = factor(site)
+    zone = factor(zone)
   ) %>%
-  select(flux, soil_temperature, soil_moisture, cover) %>%
+  select(flux, soil_temp, soil_moist, sand, silt, clay, carbon, nitrogen, zone) %>%
   na.omit()
+
 tree_mod <- rpart(
-  flux ~ soil_temperature + soil_moisture + cover,
+  flux ~ soil_temp + soil_moist + sand + silt + clay + carbon + nitrogen + zone,
   data = d,
   method = "anova",
   control = rpart.control(
-    cp = 0.01,
+    cp = 0.03,
     minsplit = 10,
     minbucket = 5
   )
 )
 
-# summary(tree_mod)
+ summary(tree_mod)
 ```
 
 ```{r co2-tree-eval}
@@ -517,24 +1412,23 @@ R2_cv <- 1 - min(tree_pruned$cptable[, "xerror"])
 
 R2_train; R2_cv
 
-tree_pruned$variable.importance/244.0486
+tree_pruned$variable.importance/517.99614
 ```
 
 nsplits = 6
-CO2 CV R2 = 1-0.28630 = 0.71
-Rel. Err. = 0.18
+CO2 CV R2 = 1-0.5202714 = 0.48
+Rel. Err. = 0.33
 
 ```{r ch4-decision-tree}
-d <- data %>%
+d <- data_soil %>%
   filter(gas == "ch4") %>%
   mutate(
-    cover = factor(cover),
-    site = factor(site)
+    zone = factor(zone),
   ) %>%
-  select(flux, soil_temperature, soil_moisture, cover) %>%
+  select(flux, soil_temp, soil_moist, sand, silt, clay, carbon, nitrogen, zone) %>%
   na.omit()
 tree_mod <- rpart(
-  flux ~ soil_temperature + soil_moisture + cover,
+  flux ~ soil_temp + soil_moist + sand + silt + clay + carbon + nitrogen + zone,
   data = d,
   method = "anova",
   control = rpart.control(
@@ -544,51 +1438,8 @@ tree_mod <- rpart(
   )
 )
 
-# summary(tree_mod)
+summary(tree_mod)
 ```
-
-## CO2 Tree Q10
-
-```{r}
-df <- tibble(
-  grouping = c("10-15", "15-20","15-20", "20-25", "20-25"),
-  co2_flux = c(1.1, 1.8, 2.5, 2.8, 4.1),
-  data_percent = c(0.3, 0.23, 0.16, 0.08, 0.22)
-) %>% 
-  group_by(grouping) %>% 
-  # rowwise() %>% 
-  mutate(group_percent = sum(data_percent),
-         group_wt = data_percent/group_percent,
-         group_wt_co2 = group_wt*co2_flux)  %>% 
-  summarize(group_wt_co2 = sum(group_wt_co2))
-
-# Add midpoints
-df <- df %>%
-  mutate(
-    T_mid = case_when(
-      grouping == "10-15" ~ 12.5,
-      grouping == "15-20" ~ 17.5,
-      grouping == "20-25" ~ 22.5
-    )
-  )
-
-# 1. Interval-specific Q10
-Q10_lower <- (df$group_wt_co2[2] / df$group_wt_co2[1]) ^ 2
-Q10_upper <- (df$group_wt_co2[3] / df$group_wt_co2[2]) ^ 2
-
-# 2. Overall Q10 (or regression)
-Q10_overall <- df$group_wt_co2[3] / df$group_wt_co2[1]
-
-fit <- lm(log(group_wt_co2) ~ T_mid, data = df)
-Q10_fit <- exp(10 * coef(fit)["T_mid"])
-
-# Results
-tibble(
-  interval = c("10-15 → 15-20", "15-20 → 20-25", "Overall / fitted (12.5–22.5 °C)"),
-  Q10 = round(c(Q10_lower, Q10_upper, Q10_overall), 2)
-)
-```
-
 
 ```{r ch4-eval-tree}
 # get best error
@@ -614,8 +1465,13 @@ R2_cv <- 1 - min(tree_pruned$cptable[, "xerror"])
 
 R2_train; R2_cv
 
-tree_pruned$variable.importance/49.034475
+tree_pruned$variable.importance/141.272508
 ```
+
+nsplits = 3
+CO2 CV R2 = 1-0.824407 = 0.18
+Rel. Err. = 0.62
+
 # more within node stats (change tree by creating/re-creating `tree_pruned`)
 
 ```{r}
@@ -633,107 +1489,5 @@ node_stats <- tree_pruned$frame %>%
   select(node, n, mean, sd, se)
 
 print(node_stats)
-```
-
-```{r n2o-decision-tree}
-d <- data %>%
-  filter(gas == "n2o") %>%
-  mutate(
-    cover = factor(cover),
-    site = factor(site)
-  ) %>%
-  select(flux, soil_temperature, soil_moisture, cover) %>%
-  na.omit()
-tree_mod <- rpart(
-  flux ~ soil_temperature + soil_moisture + cover,
-  data = d,
-  method = "anova",
-  control = rpart.control(
-    cp = 0.01,
-    minsplit = 10,
-    minbucket = 5
-  )
-)
-
-summary(tree_mod)
-
-# get best error
-best_cp <- tree_mod$cptable[
-  which.min(tree_mod$cptable[, "xerror"]),
-  "CP"
-]
-
-best_cp
-
-# prune tree
-tree_pruned <- prune(tree_mod, cp = best_cp)
-
-rpart.plot(tree_pruned)
-printcp(tree_pruned)
-
-# Training R²
-pred <- predict(tree_pruned)
-R2_train <- cor(d$flux, pred)^2
-
-# Cross-validated R²
-R2_cv <- 1 - min(tree_pruned$cptable[, "xerror"])
-
-R2_train; R2_cv
-
-tree_pruned$variable.importance
-```
-
-## Comparison to Koyama data
-
-```{r}
-koyama <- read_csv("/Users/gawainmacneacail/Documents/Research/Work/Data Analysis/nachusa-2022-ghg/data/koyama/Koyama_et_al_GPM_Dryad_230720.csv") %>% 
-  janitor::clean_names() %>% 
-  mutate(ch4_mg_ch4_c_m_2_day = as.numeric(ch4_mg_ch4_c_m_2_day))
-
-koyama %>% 
-  ggplot(aes(x = ch4_mg_ch4_c_m_2_day)) +
-  geom_density(fill = "red") +
-  theme_bw()
-
-  
-koyama %>% 
-  group_by(plot_id) %>% 
-  summarize(median_ch4_mg_ch4_c_m_2_day = median(ch4_mg_ch4_c_m_2_day, na.rm=T)) %>% 
-  arrange(median_ch4_mg_ch4_c_m_2_day) %>% 
-  mutate(median_ch4_g_ch4_c_m_2_yr = median_ch4_mg_ch4_c_m_2_day*365.25/1000,
-         median_ch4_kg_ch4_c_m_2_yr = median_ch4_g_ch4_c_m_2_yr*10)
-
-koyama %>% 
-  group_by(plot_id) %>% 
-  summarize(q25_ch4_mg_ch4_c_m_2_day = quantile(ch4_mg_ch4_c_m_2_day, 0.25, na.rm=T)) %>% 
-  arrange(q25_ch4_mg_ch4_c_m_2_day) %>% 
-  mutate(q25_ch4_g_ch4_c_m_2_yr = q25_ch4_mg_ch4_c_m_2_day*365.25/1000,
-        q25_ch4_kg_ch4_c_m_2_yr = q25_ch4_g_ch4_c_m_2_yr*10)
-
-koyama %>% 
-  group_by(plot_id) %>% 
-  summarize(q75_ch4_mg_ch4_c_m_2_day = quantile(ch4_mg_ch4_c_m_2_day, 0.75, na.rm=T)) %>% 
-  arrange(q75_ch4_mg_ch4_c_m_2_day) %>% 
-  mutate(q75_ch4_g_ch4_c_m_2_yr = q75_ch4_mg_ch4_c_m_2_day*365.25/1000,
-        q75_ch4_kg_ch4_c_m_2_yr = q75_ch4_g_ch4_c_m_2_yr*10)
-```
-
-# Local met data
-```{r}
-read_csv("data/nach_temp_precip.csv") %>% 
-  mutate(year = year(day),
-         month = month(day)) %>% 
-  filter(year == 2024) %>% 
-  group_by(month) %>% 
-  summarize(mean_temp = mean((daily_mean_temp-32) * 5/9),
-            total_precip = sum(daily_total_precip*25.4, na.rm = T))
-```
-
-```{r}
-read_csv("data/nach_temp_precip.csv") %>% 
-  mutate(month = month(day)) %>% 
-  # group_by(month) %>% 
-  summarize(mean_temp = mean((daily_mean_temp-32) * 5/9),
-            total_precip = sum(daily_total_precip*25.4, na.rm = T))
 ```
 

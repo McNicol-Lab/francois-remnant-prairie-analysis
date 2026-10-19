@@ -1,0 +1,41 @@
+plot,depth,soc,sand ,clay,province,surf_geology,ph_h2o,hzn_desg,structtype,structsize
+sw_1,10,5.105,7.1,59.8,eastern broadleaf forest (continental) province,glacialtill_sediments,7.3,Ap,fine,granular
+sw_1,20,2.355,6,50.4,eastern broadleaf forest (continental) province,glacialtill_sediments,7.3,Ap,fine,granular
+sw_1,30,1.48,5.7,54.8,eastern broadleaf forest (continental) province,glacialtill_sediments,7.23,Ape,fine,subangular blocky
+sw_1,40,1.86,6,60.7,eastern broadleaf forest (continental) province,glacialtill_sediments,7.2,Bte,fine and medium,subangular blocky
+sw_1,50,1.325,6.1,58.9,eastern broadleaf forest (continental) province,glacialtill_sediments,7.2,Bt,fine and medium,subangular blocky
+sw_1,60,0.63,4.3,58.2,eastern broadleaf forest (continental) province,glacialtill_sediments,7.2,Bt,fine and medium,subangular blocky
+sw_1,70,0.78,4,54.9,eastern broadleaf forest (continental) province,glacialtill_sediments,8.1,Bt,coarse,prismatic
+sw_1,80,0.79,5.6,53,eastern broadleaf forest (continental) province,glacialtill_sediments,7.2,Bt,coarse,prismatic
+sw_1,90,1.21,75.1,0,eastern broadleaf forest (continental) province,glacialtill_sediments,8.28,Bcd,coarse,angular blocky
+sw_1,100,1.87,9.3,72.1,eastern broadleaf forest (continental) province,glacialtill_sediments,8.2,Cd,coarse,prismatic
+sw-2,10,3.82,6,54.3,eastern broadleaf forest (continental) province,glacialtill_sediments,7.3,Ap,fine,granular
+sw-2,20,1.46,4.9,60.4,eastern broadleaf forest (continental) province,glacialtill_sediments,7.3,Ap,fine,granular
+sw-2,30,0.655,10.8,53.4,eastern broadleaf forest (continental) province,glacialtill_sediments,7.23,Ape,fine,subangular blocky
+sw-2,40,0.5,5.3,57.8,eastern broadleaf forest (continental) province,glacialtill_sediments,7.2,Bte,fine and medium,subangular blocky
+sw-2,50,0.56,7.6,62.4,eastern broadleaf forest (continental) province,glacialtill_sediments,7.2,Bt,fine and medium,subangular blocky
+sw-2,60,1.51,23.4,0,eastern broadleaf forest (continental) province,glacialtill_sediments,7.2,Bt,fine and medium,subangular blocky
+sw-2,70,1.575,7.4,54.6,eastern broadleaf forest (continental) province,glacialtill_sediments,8.1,Bt,coarse,prismatic
+sw-2,80,1.73,8.4,54.8,eastern broadleaf forest (continental) province,glacialtill_sediments,7.2,Bt,coarse,prismatic
+sw-2,90,2.615,6.7,50.9,eastern broadleaf forest (continental) province,glacialtill_sediments,8.28,Bcd,coarse,angular blocky
+sw-2,100,2.535,6.1,53.1,eastern broadleaf forest (continental) province,glacialtill_sediments,8.2,Cd,coarse,prismatic
+upland-1,10,6.805,24.2,11.9,eastern broadleaf forest (continental) province,glacialtill_sediments,7.3,Ap,fine,granular
+upland-1,20,3.185,3.5,60.2,eastern broadleaf forest (continental) province,glacialtill_sediments,7.3,Ap,fine,granular
+upland-1,30,2.2,2.8,65.5,eastern broadleaf forest (continental) province,glacialtill_sediments,7.23,Ape,fine,subangular blocky
+upland-1,40,1.31,3.4,64.7,eastern broadleaf forest (continental) province,glacialtill_sediments,7.2,Bte,fine and medium,subangular blocky
+upland-1,50,0.73,14.1,8.1,eastern broadleaf forest (continental) province,glacialtill_sediments,7.2,Bt,fine and medium,subangular blocky
+upland-1,60,0.5,1.8,67.8,eastern broadleaf forest (continental) province,glacialtill_sediments,7.2,Bt,fine and medium,subangular blocky
+upland-1,70,1.815,5,34,eastern broadleaf forest (continental) province,glacialtill_sediments,8.1,Bt,coarse,prismatic
+upland-1,80,2.31,7.2,61.6,eastern broadleaf forest (continental) province,glacialtill_sediments,7.2,Bt,coarse,prismatic
+upland-1,90,0.81,9.3,54.3,eastern broadleaf forest (continental) province,glacialtill_sediments,8.28,Bcd,coarse,angular blocky
+upland-1,100,3.005,5.2,54.3,eastern broadleaf forest (continental) province,glacialtill_sediments,8.2,Cd,coarse,prismatic
+upland-2,10,5.51,0,44.5,eastern broadleaf forest (continental) province,glacialtill_sediments,7.3,Ap,fine,granular
+upland-2,20,4.055,5.2,56.5,eastern broadleaf forest (continental) province,glacialtill_sediments,7.3,Ap,fine,granular
+upland-2,30,2.53,15.9,5.1,eastern broadleaf forest (continental) province,glacialtill_sediments,7.23,Ape,fine,subangular blocky
+upland-2,40,1.535,5.4,52.4,eastern broadleaf forest (continental) province,glacialtill_sediments,7.2,Bte,fine and medium,subangular blocky
+upland-2,50,1.145,6.2,56.7,eastern broadleaf forest (continental) province,glacialtill_sediments,7.2,Bt,fine and medium,subangular blocky
+upland-2,60,1.78,4.1,56.2,eastern broadleaf forest (continental) province,glacialtill_sediments,7.2,Bt,fine and medium,subangular blocky
+upland-2,70,0.535,3.1,65.2,eastern broadleaf forest (continental) province,glacialtill_sediments,8.1,Bt,coarse,prismatic
+upland-2,80,0.95,1.8,60.3,eastern broadleaf forest (continental) province,glacialtill_sediments,7.2,Bt,coarse,prismatic
+upland-2,90,0.925,3.6,60.9,eastern broadleaf forest (continental) province,glacialtill_sediments,8.28,Bcd,coarse,angular blocky
+upland-2,100,2.965,7.5,48.7,eastern broadleaf forest (continental) province,glacialtill_sediments,8.2,Cd,coarse,prismatic
